@@ -11,6 +11,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -110,8 +111,19 @@ func newHome(ctx context.Context, program string, autoYes bool) *home {
 	// Load application state
 	appState := config.LoadState()
 
-	// Initialize storage
-	storage, err := session.NewStorage(appState)
+	// Initialize storage, scoped to the current repository so that cs processes running
+	// in different repositories don't see each other's sessions.
+	currentDir, err := filepath.Abs(".")
+	if err != nil {
+		fmt.Printf("Failed to get current directory: %v\n", err)
+		os.Exit(1)
+	}
+	repoRoot, err := git.FindRepoRoot(currentDir)
+	if err != nil {
+		fmt.Printf("Failed to find git repository root: %v\n", err)
+		os.Exit(1)
+	}
+	storage, err := session.NewRepoStorage(appState, repoRoot)
 	if err != nil {
 		fmt.Printf("Failed to initialize storage: %v\n", err)
 		os.Exit(1)
