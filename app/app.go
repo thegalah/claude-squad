@@ -203,13 +203,51 @@ func (m *home) Init() tea.Cmd {
 			return previewTickMsg{}
 		},
 		tickUpdateMetadataCmd(m.snapshotActiveInstances(), m.list.GetSelectedInstance()),
+		checkLeftoverWorktreesCmd,
 	)
+}
+
+// leftoverWorktreesMsg reports how many leftover worktrees were found at startup.
+type leftoverWorktreesMsg struct{ count int }
+
+// checkLeftoverWorktreesCmd counts worktree directories that no saved session uses, so the
+// user can be pointed at `cs prune`. It only lists directories and doesn't run git.
+func checkLeftoverWorktreesCmd() tea.Msg {
+	tracked, err := session.TrackedWorktreePaths(config.LoadState())
+	if err != nil {
+		log.WarningLog.Printf("could not check for leftover worktrees: %v", err)
+		return nil
+	}
+	leftovers, err := git.FindLeftoverWorktrees(tracked, git.LeftoverMinAge, false)
+	if err != nil {
+		log.WarningLog.Printf("could not check for leftover worktrees: %v", err)
+		return nil
+	}
+	return leftoverWorktreesMsg{count: len(leftovers)}
+}
+
+// leftoverWorktreesNotice is the startup notice shown when leftover worktrees exist.
+func leftoverWorktreesNotice(count int) string {
+	return fmt.Sprintf("%d leftover worktree(s) found. Run '%s prune' to clean them up.",
+		count, filepath.Base(os.Args[0]))
 }
 
 func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case hideErrMsg:
 		m.errBox.Clear()
+	case leftoverWorktreesMsg:
+		if msg.count == 0 {
+			return m, nil
+		}
+		m.errBox.SetInfo(leftoverWorktreesNotice(msg.count))
+		return m, func() tea.Msg {
+			select {
+			case <-m.ctx.Done():
+			case <-time.After(10 * time.Second):
+			}
+			return hideErrMsg{}
+		}
 	case previewTickMsg:
 		cmd := m.instanceChanged()
 		return m, tea.Batch(

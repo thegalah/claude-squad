@@ -218,3 +218,19 @@ func (s *Storage) UpdateInstance(instance *Instance) error {
 func (s *Storage) DeleteAllInstances() error {
 	return s.state.DeleteAllInstances()
 }
+
+// TrackedWorktreePaths returns the worktree paths of every stored instance, across all
+// repositories, without restoring the instances.
+func TrackedWorktreePaths(state config.InstanceStorage) ([]string, error) {
+	var instancesData []InstanceData
+	if err := json.Unmarshal(state.GetInstances(), &instancesData); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal instances: %w", err)
+	}
+	paths := make([]string, 0, len(instancesData))
+	for _, data := range instancesData {
+		if data.Worktree.WorktreePath != "" {
+			paths = append(paths, data.Worktree.WorktreePath)
+		}
+	}
+	return paths, nil
+}
