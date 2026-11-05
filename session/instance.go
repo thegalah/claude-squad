@@ -59,6 +59,9 @@ type Instance struct {
 
 	// selectedBranch is the existing branch to start on (empty = new branch from HEAD)
 	selectedBranch string
+	// setupErr is set when the repository's worktree setup script failed during Start. The
+	// session still starts; the app reports the error via TakeSetupError.
+	setupErr error
 
 	// The below fields are initialized upon calling Start().
 
@@ -267,6 +270,16 @@ func (i *Instance) Start(firstTimeSetup bool) error {
 		if err := i.gitWorktree.Setup(); err != nil {
 			setupErr = fmt.Errorf("failed to setup git worktree: %w", err)
 			return setupErr
+		}
+
+		// Prepare the new worktree (copy env files, install dependencies, ...) before the
+		// program starts. A failing script is reported but doesn't stop the session.
+		if ran, _, err := runWorktreeSetup(i.gitWorktree.GetRepoPath(), i.gitWorktree.GetWorktreePath(),
+			i.gitWorktree.GetBranchName(), i.Title); err != nil {
+			log.WarningLog.Printf("worktree setup for %q: %v", i.Title, err)
+			i.setupErr = err
+		} else if ran {
+			log.InfoLog.Printf("worktree setup for %q finished", i.Title)
 		}
 
 		// Create new session
@@ -741,4 +754,12 @@ func hasClaudeConversation(dir string) bool {
 		}
 	}
 	return false
+}
+
+// TakeSetupError returns the error from the worktree setup script during Start, if any, and
+// clears it so it is only reported once.
+func (i *Instance) TakeSetupError() error {
+	err := i.setupErr
+	i.setupErr = nil
+	return err
 }

@@ -369,6 +369,13 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			msg.instance.AutoYes = true
 		}
 
+		// The session started, but its worktree setup script failed: keep the session and
+		// tell the user where the script's output is.
+		var setupErrCmd tea.Cmd
+		if setupErr := msg.instance.TakeSetupError(); setupErr != nil {
+			setupErrCmd = m.handleErrorFor(setupErr, 15*time.Second)
+		}
+
 		if msg.promptAfterName {
 			m.state = statePrompt
 			m.menu.SetState(ui.StatePrompt)
@@ -385,7 +392,7 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.showHelpScreen(helpStart(msg.instance), nil)
 		}
 
-		return m, tea.Batch(tea.WindowSize(), m.instanceChanged())
+		return m, tea.Batch(tea.WindowSize(), m.instanceChanged(), setupErrCmd)
 	case spinner.TickMsg:
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
@@ -1035,12 +1042,17 @@ func tickUpdateMetadataCmd(active []*session.Instance, selected *session.Instanc
 // handleError handles all errors which get bubbled up to the app. sets the error message. We return a callback tea.Cmd that returns a hideErrMsg message
 // which clears the error message after 3 seconds.
 func (m *home) handleError(err error) tea.Cmd {
+	return m.handleErrorFor(err, 3*time.Second)
+}
+
+// handleErrorFor shows err in the error box for d.
+func (m *home) handleErrorFor(err error, d time.Duration) tea.Cmd {
 	log.ErrorLog.Printf("%v", err)
 	m.errBox.SetError(err)
 	return func() tea.Msg {
 		select {
 		case <-m.ctx.Done():
-		case <-time.After(3 * time.Second):
+		case <-time.After(d):
 		}
 
 		return hideErrMsg{}
