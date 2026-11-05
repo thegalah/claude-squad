@@ -9,6 +9,7 @@ import (
 
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -544,7 +545,7 @@ func (i *Instance) Resume() error {
 		if err := i.tmuxSession.Restore(); err != nil {
 			log.ErrorLog.Print(err)
 			// If restore fails, fall back to creating new session
-			if err := i.tmuxSession.Start(i.gitWorktree.GetWorktreePath()); err != nil {
+			if err := i.tmuxSession.StartWithCommand(i.gitWorktree.GetWorktreePath(), i.resumeCommand()); err != nil {
 				log.ErrorLog.Print(err)
 				// Cleanup git worktree if tmux session creation fails
 				if cleanupErr := i.gitWorktree.Cleanup(); cleanupErr != nil {
@@ -555,8 +556,9 @@ func (i *Instance) Resume() error {
 			}
 		}
 	} else {
-		// Create new tmux session
-		if err := i.tmuxSession.Start(i.gitWorktree.GetWorktreePath()); err != nil {
+		// Create new tmux session. The program's previous process is gone, so for claude
+		// pick up the conversation it left behind in this worktree.
+		if err := i.tmuxSession.StartWithCommand(i.gitWorktree.GetWorktreePath(), i.resumeCommand()); err != nil {
 			log.ErrorLog.Print(err)
 			// Cleanup git worktree if tmux session creation fails
 			if cleanupErr := i.gitWorktree.Cleanup(); cleanupErr != nil {
@@ -668,4 +670,75 @@ func (i *Instance) SendKeys(keys string) error {
 		return fmt.Errorf("cannot send keys to instance that has not been started or is paused")
 	}
 	return i.tmuxSession.SendKeys(keys)
+}
+
+// resumeCommand returns the command used to relaunch the program when resuming into a new
+// tmux session. For claude, it adds --continue when claude has a saved conversation for this
+// worktree, so the agent keeps its context. Without a saved conversation, `claude --continue`
+// exits immediately, so the plain program is used instead.
+func (i *Instance) resumeCommand() string {
+	if !isClaudeProgram(i.Program) || hasContinueFlag(i.Program) {
+		return i.Program
+	}
+	if !hasClaudeConversation(i.gitWorktree.GetWorktreePath()) {
+		return i.Program
+	}
+	return i.Program + " --continue"
+}
+
+// isClaudeProgram reports whether program launches claude, e.g. "claude",
+// "/usr/local/bin/claude" or "claude --model opus".
+func isClaudeProgram(program string) bool {
+	fields := strings.Fields(program)
+	return len(fields) > 0 && filepath.Base(fields[0]) == tmux.ProgramClaude
+}
+
+// hasContinueFlag reports whether program already asks claude to continue or resume.
+func hasContinueFlag(program string) bool {
+	for _, f := range strings.Fields(program)[1:] {
+		switch {
+		case f == "-c", f == "--continue", f == "-r", f == "--resume", strings.HasPrefix(f, "--resume="):
+			return true
+		}
+	}
+	return false
+}
+
+// claudeConfigDir returns the directory where claude stores its state.
+func claudeConfigDir() (string, error) {
+	if dir := os.Getenv("CLAUDE_CONFIG_DIR"); dir != "" {
+		return dir, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".claude"), nil
+}
+
+var nonAlphanumeric = regexp.MustCompile(`[^a-zA-Z0-9]`)
+
+// claudeProjectDirName returns the name claude uses for a working directory's folder under
+// <config>/projects: every non-alphanumeric character is replaced with '-'.
+func claudeProjectDirName(dir string) string {
+	return nonAlphanumeric.ReplaceAllString(dir, "-")
+}
+
+// hasClaudeConversation reports whether claude has a saved conversation for dir.
+func hasClaudeConversation(dir string) bool {
+	configDir, err := claudeConfigDir()
+	if err != nil {
+		return false
+	}
+	candidates := []string{dir}
+	if resolved, err := filepath.EvalSymlinks(dir); err == nil && resolved != dir {
+		candidates = append(candidates, resolved)
+	}
+	for _, d := range candidates {
+		matches, err := filepath.Glob(filepath.Join(configDir, "projects", claudeProjectDirName(d), "*.jsonl"))
+		if err == nil && len(matches) > 0 {
+			return true
+		}
+	}
+	return false
 }

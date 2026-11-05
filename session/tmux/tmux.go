@@ -93,13 +93,20 @@ func newTmuxSession(name string, program string, ptyFactory PtyFactory, cmdExec 
 // Start creates and starts a new tmux session, then attaches to it. Program is the command to run in
 // the session (ex. claude). workdir is the git worktree directory.
 func (t *TmuxSession) Start(workDir string) error {
+	return t.StartWithCommand(workDir, t.program)
+}
+
+// StartWithCommand creates a new session like Start, but launches command instead of the
+// session's program. The session's program is still used for prompt detection, so command
+// should be the same program with extra arguments (e.g. "claude --continue").
+func (t *TmuxSession) StartWithCommand(workDir string, command string) error {
 	// Check if the session already exists
 	if t.DoesSessionExist() {
 		return fmt.Errorf("tmux session already exists: %s", t.sanitizedName)
 	}
 
 	// Create a new detached tmux session and start claude in it
-	cmd := exec.Command("tmux", "new-session", "-d", "-s", t.sanitizedName, "-c", workDir, t.program)
+	cmd := exec.Command("tmux", "new-session", "-d", "-s", t.sanitizedName, "-c", workDir, command)
 
 	ptmx, err := t.ptyFactory.Start(cmd)
 	if err != nil {
