@@ -143,6 +143,7 @@ func newHome(ctx context.Context, program string, autoYes bool) *home {
 		appState:     appState,
 	}
 	h.list = ui.NewList(&h.spinner, autoYes)
+	h.list.SetRepoName(filepath.Base(repoRoot))
 
 	// Load saved instances
 	instances, err := storage.LoadInstances()

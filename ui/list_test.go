@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/bubbles/spinner"
+	"github.com/mattn/go-runewidth"
 	"github.com/stretchr/testify/require"
 )
 
@@ -72,4 +73,22 @@ func TestMoveWithSingleItem(t *testing.T) {
 
 	require.False(t, l.MoveUp())
 	require.False(t, l.MoveDown())
+}
+
+func TestTitleIncludesRepoName(t *testing.T) {
+	s := spinner.New()
+	l := NewList(&s, false)
+	require.Equal(t, " Instances ", l.title(80))
+
+	l.SetRepoName("claude-squad")
+	require.Equal(t, " Instances · claude-squad ", l.title(80))
+	require.Equal(t, " Instances · claude-squad ", l.title(0), "no width limit")
+
+	// Too narrow for the full name: truncate it with an ellipsis.
+	got := l.title(20)
+	require.Equal(t, " Instances · claud… ", got)
+	require.LessOrEqual(t, runewidth.StringWidth(got), 20)
+
+	// Too narrow for any of the name: fall back to the plain title.
+	require.Equal(t, " Instances ", l.title(14))
 }

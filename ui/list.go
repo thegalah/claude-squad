@@ -63,6 +63,9 @@ type List struct {
 	// map of repo name to number of instances using it. Used to display the repo name only if there are
 	// multiple repos in play.
 	repos map[string]int
+
+	// repoName is the name of the repository this cs process is scoped to, shown in the title.
+	repoName string
 }
 
 func NewList(spinner *spinner.Model, autoYes bool) *List {
@@ -72,6 +75,31 @@ func NewList(spinner *spinner.Model, autoYes bool) *List {
 		repos:    make(map[string]int),
 		autoyes:  autoYes,
 	}
+}
+
+// SetRepoName sets the repository name shown in the list title.
+func (l *List) SetRepoName(name string) {
+	l.repoName = name
+}
+
+// title returns the list title, including the repo name when set. maxWidth is the space
+// available for the title text; the repo name is truncated with an ellipsis to fit.
+func (l *List) title(maxWidth int) string {
+	const base = " Instances "
+	if l.repoName == "" {
+		return base
+	}
+	full := fmt.Sprintf(" Instances · %s ", l.repoName)
+	if maxWidth <= 0 || runewidth.StringWidth(full) <= maxWidth {
+		return full
+	}
+	// Keep "Instances · " and as much of the repo name as fits.
+	prefix := " Instances · "
+	room := maxWidth - runewidth.StringWidth(prefix) - 1 // trailing space
+	if room < 2 {
+		return base
+	}
+	return prefix + runewidth.Truncate(l.repoName, room, "…") + " "
 }
 
 // SetSize sets the height and width of the list.
@@ -226,7 +254,6 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool, h
 }
 
 func (l *List) String() string {
-	const titleText = " Instances "
 	const autoYesText = " auto-yes "
 
 	// Write the title.
@@ -238,9 +265,11 @@ func (l *List) String() string {
 	// add padding of 2 because the border on list items adds some extra characters
 	titleWidth := AdjustPreviewWidth(l.width) + 2
 	if !l.autoyes {
+		titleText := l.title(titleWidth - mainTitle.GetHorizontalFrameSize())
 		b.WriteString(lipgloss.Place(
 			titleWidth, 1, lipgloss.Left, lipgloss.Bottom, mainTitle.Render(titleText)))
 	} else {
+		titleText := l.title(titleWidth/2 - mainTitle.GetHorizontalFrameSize())
 		title := lipgloss.Place(
 			titleWidth/2, 1, lipgloss.Left, lipgloss.Bottom, mainTitle.Render(titleText))
 		autoYes := lipgloss.Place(
