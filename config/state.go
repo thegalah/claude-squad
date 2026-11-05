@@ -19,6 +19,10 @@ type InstanceStorage interface {
 	SaveInstances(instancesJSON json.RawMessage) error
 	// GetInstances returns the raw instance data
 	GetInstances() json.RawMessage
+	// UpdateInstances atomically applies fn to the latest instance data on disk and
+	// persists the result. Use this instead of SaveInstances when other processes may
+	// be writing to the same state file concurrently.
+	UpdateInstances(fn func(current json.RawMessage) (json.RawMessage, error)) error
 	// DeleteAllInstances removes all stored instances
 	DeleteAllInstances() error
 }
@@ -103,15 +107,71 @@ func SaveState(state *State) error {
 		return fmt.Errorf("failed to marshal state: %w", err)
 	}
 
-	return os.WriteFile(statePath, data, 0644)
+	// Write to a temp file and rename so concurrent readers never see a partial file.
+	tmp, err := os.CreateTemp(configDir, StateFileName+".*.tmp")
+	if err != nil {
+		return fmt.Errorf("failed to create temp state file: %w", err)
+	}
+	tmpPath := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		os.Remove(tmpPath)
+		return fmt.Errorf("failed to write state: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("failed to write state: %w", err)
+	}
+	if err := os.Chmod(tmpPath, 0644); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("failed to chmod state: %w", err)
+	}
+	if err := os.Rename(tmpPath, statePath); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("failed to replace state: %w", err)
+	}
+	return nil
+}
+
+// updateState re-reads the state from disk, applies mutate to it, and saves it. The
+// in-memory state s is refreshed with the result. Multiple cs processes share the same
+// state file, so writing s as-is would clobber changes made by other processes.
+func (s *State) updateState(mutate func(latest *State) error) error {
+	latest := LoadState()
+	if err := mutate(latest); err != nil {
+		return err
+	}
+	if err := SaveState(latest); err != nil {
+		return err
+	}
+	*s = *latest
+	return nil
 }
 
 // InstanceStorage interface implementation
 
 // SaveInstances saves the raw instance data
 func (s *State) SaveInstances(instancesJSON json.RawMessage) error {
-	s.InstancesData = instancesJSON
-	return SaveState(s)
+	return s.updateState(func(latest *State) error {
+		latest.InstancesData = instancesJSON
+		return nil
+	})
+}
+
+// UpdateInstances applies fn to the latest instance data on disk and saves the result
+func (s *State) UpdateInstances(fn func(current json.RawMessage) (json.RawMessage, error)) error {
+	return s.updateState(func(latest *State) error {
+		current := latest.InstancesData
+		if len(current) == 0 {
+			current = json.RawMessage("[]")
+		}
+		updated, err := fn(current)
+		if err != nil {
+			return err
+		}
+		latest.InstancesData = updated
+		return nil
+	})
 }
 
 // GetInstances returns the raw instance data
@@ -121,8 +181,10 @@ func (s *State) GetInstances() json.RawMessage {
 
 // DeleteAllInstances removes all stored instances
 func (s *State) DeleteAllInstances() error {
-	s.InstancesData = json.RawMessage("[]")
-	return SaveState(s)
+	return s.updateState(func(latest *State) error {
+		latest.InstancesData = json.RawMessage("[]")
+		return nil
+	})
 }
 
 // AppState interface implementation
@@ -134,6 +196,8 @@ func (s *State) GetHelpScreensSeen() uint32 {
 
 // SetHelpScreensSeen updates the bitmask of seen help screens
 func (s *State) SetHelpScreensSeen(seen uint32) error {
-	s.HelpScreensSeen = seen
-	return SaveState(s)
+	return s.updateState(func(latest *State) error {
+		latest.HelpScreensSeen = seen
+		return nil
+	})
 }
