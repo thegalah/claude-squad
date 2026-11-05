@@ -18,6 +18,8 @@ To pull upstream changes in: `git fetch upstream && git merge upstream/main` on 
 - **mise.toml**: pins Go to the `toolchain` version in `go.mod`.
 - **Per-repo session scoping**: each `cs` process only loads and saves instances whose repo root matches the git repo it was started in (`session.NewRepoStorage`). Saves read-modify-write `~/.claude-squad/state.json` so concurrent `cs` processes in different repos don't clobber each other; state is written atomically. The daemon and `cs reset` remain global.
 - **Resume continues the claude conversation**: when Resume has to start a new tmux session, claude is relaunched with `--continue` if it has a saved conversation for the worktree (see `Instance.resumeCommand` in `session/instance.go`).
+- **Repo name in the list title**: `Instances · <repo>`, so `cs` windows in different repos can be told apart.
+- **`cs prune`**: removes worktree directories under `~/.claude-squad/worktrees` that no saved session (in any repo) uses (`session/git/leftover.go`). Keeps branches; skips dirty/detached worktrees unless `--force`; ignores directories changed in the last 10 minutes; leaves non-cs-named directories alone. The TUI shows a notice on startup when leftovers exist.
 
 ## Development workflow
 

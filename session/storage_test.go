@@ -128,3 +128,15 @@ func TestRepoStorageConcurrentProcesses(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []string{"b1"}, titles(instancesB))
 }
+
+func TestTrackedWorktreePaths(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	seedState(t,
+		pausedInstanceData("a1", "/repos/a"),
+		pausedInstanceData("b1", "/repos/b"),
+	)
+	paths, err := TrackedWorktreePaths(config.LoadState())
+	require.NoError(t, err)
+	sort.Strings(paths)
+	require.Equal(t, []string{"/repos/a-worktree-a1", "/repos/b-worktree-b1"}, paths)
+}
