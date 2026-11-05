@@ -140,6 +140,30 @@ Each profile has two fields:
 
 If no profiles are defined, Claude Squad uses `default_program` directly as the launch command (the default is `claude`).
 
+#### Worktree setup script
+
+New worktrees only contain tracked files, so things like `.env` and `node_modules` are missing. To prepare each new session's worktree before the agent starts, add a setup script to your repository at `.claude-squad/setup.sh`:
+
+```sh
+#!/bin/sh
+set -e
+cp "$CS_REPO_PATH/.env" .
+pnpm install --frozen-lockfile
+```
+
+The script is read from your main checkout, so you can commit it or git-ignore it. It runs inside the new worktree with these environment variables:
+
+| Variable           | Value                                  |
+|--------------------|----------------------------------------|
+| `CS_REPO_PATH`     | Root of your main checkout             |
+| `CS_WORKTREE_PATH` | The new worktree (the current folder)  |
+| `CS_BRANCH`        | The session's branch                   |
+| `CS_SESSION`       | The session's name                     |
+
+The session shows a spinner while the script runs, and any prompt is sent once the agent has started. Output goes to `~/.claude-squad/setup-logs/<worktree>.log`. If the script fails or runs longer than 15 minutes, the session still starts and an error shows where the log is. Executable scripts run directly (so their shebang is used); others run with `sh`. The script runs for new sessions only, not when resuming a paused one.
+
+Run `cs prune` to remove leftover worktrees that no session uses. Branches are kept; worktrees with uncommitted changes are skipped unless you pass `--force`.
+
 ### FAQs
 
 #### Failed to start new session
