@@ -56,6 +56,8 @@ type home struct {
 
 	program string
 	autoYes bool
+	// repoName is the base name of the repo this cs process is scoped to.
+	repoName string
 
 	// storage is the interface for saving/loading data to/from the app's state
 	storage *session.Storage
@@ -143,7 +145,8 @@ func newHome(ctx context.Context, program string, autoYes bool) *home {
 		appState:     appState,
 	}
 	h.list = ui.NewList(&h.spinner, autoYes)
-	h.list.SetRepoName(filepath.Base(repoRoot))
+	h.repoName = filepath.Base(repoRoot)
+	h.list.SetRepoName(h.repoName)
 
 	// Load saved instances
 	instances, err := storage.LoadInstances()
@@ -197,6 +200,7 @@ func (m *home) Init() tea.Cmd {
 	// Upon starting, we want to start the spinner. Whenever we get a spinner.TickMsg, we
 	// update the spinner, which sends a new spinner.TickMsg. I think this lasts forever lol.
 	return tea.Batch(
+		m.setWindowTitle(),
 		m.spinner.Tick,
 		func() tea.Msg {
 			time.Sleep(100 * time.Millisecond)
@@ -205,6 +209,20 @@ func (m *home) Init() tea.Cmd {
 		tickUpdateMetadataCmd(m.snapshotActiveInstances(), m.list.GetSelectedInstance()),
 		checkLeftoverWorktreesCmd,
 	)
+}
+
+// windowTitle is the terminal window/tab title, e.g. "cs · claude-squad".
+func windowTitle(repoName string) string {
+	if repoName == "" {
+		return "cs"
+	}
+	return "cs · " + repoName
+}
+
+// setWindowTitle sets the terminal title. It's also re-sent after detaching from a session,
+// since the attached program (or tmux) may have changed it.
+func (m *home) setWindowTitle() tea.Cmd {
+	return tea.SetWindowTitle(windowTitle(m.repoName))
 }
 
 // leftoverWorktreesMsg reports how many leftover worktrees were found at startup.
@@ -853,7 +871,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 				<-ch
 				m.state = stateDefault
 			})
-			return m, nil
+			return m, m.setWindowTitle()
 		}
 		// Show help screen before attaching
 		m.showHelpScreen(helpTypeInstanceAttach{}, func() {
@@ -866,7 +884,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 			m.state = stateDefault
 			m.instanceChanged()
 		})
-		return m, nil
+		return m, m.setWindowTitle()
 	default:
 		return m, nil
 	}
