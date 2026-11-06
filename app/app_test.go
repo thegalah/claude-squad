@@ -464,3 +464,8 @@ func TestConfirmationModalVisualAppearance(t *testing.T) {
 	// Test that the danger indicator is preserved
 	assert.Contains(t, rendered, "[!")
 }
+
+func TestWindowTitle(t *testing.T) {
+	assert.Equal(t, "cs · claude-squad", windowTitle("claude-squad"))
+	assert.Equal(t, "cs", windowTitle(""))
+}

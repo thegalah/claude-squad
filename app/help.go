@@ -170,6 +170,7 @@ func (m *home) handleHelpState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.state = stateDefault
 		return m, tea.Sequence(
 			tea.WindowSize(),
+			m.setWindowTitle(), // dismissing may have run an attach that changed the title
 			func() tea.Msg {
 				m.menu.SetState(ui.StateDefault)
 				return nil
