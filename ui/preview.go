@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/viewport"
 	"github.com/charmbracelet/lipgloss"
 )
@@ -19,6 +20,9 @@ type PreviewPane struct {
 	previewState previewState
 	isScrolling  bool
 	viewport     viewport.Model
+
+	// spinner animates the current step while an instance is being set up. May be nil.
+	spinner *spinner.Model
 }
 
 type previewState struct {
@@ -32,6 +36,11 @@ func NewPreviewPane() *PreviewPane {
 	return &PreviewPane{
 		viewport: viewport.New(0, 0),
 	}
+}
+
+// SetSpinner sets the spinner used to animate setup progress.
+func (p *PreviewPane) SetSpinner(s *spinner.Model) {
+	p.spinner = s
 }
 
 func (p *PreviewPane) SetSize(width, maxHeight int) {
@@ -56,7 +65,7 @@ func (p *PreviewPane) UpdateContent(instance *session.Instance) error {
 		p.setFallbackState("No agents running yet. Spin up a new instance with 'n' to get started!")
 		return nil
 	case instance.Status == session.Loading:
-		p.setFallbackState("Setting up workspace...")
+		p.previewState = previewState{fallback: true, text: p.renderStartProgress(instance)}
 		return nil
 	case instance.Status == session.Paused:
 		p.setFallbackState(lipgloss.JoinVertical(lipgloss.Center,

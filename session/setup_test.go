@@ -29,7 +29,7 @@ func writeSetupScript(t *testing.T, repo, body string, mode os.FileMode) {
 
 func TestWorktreeSetupWithoutScript(t *testing.T) {
 	repo, worktree := newSetupFixture(t)
-	ran, logPath, err := runWorktreeSetup(repo, worktree, "me/feature", "feature")
+	ran, logPath, err := runWorktreeSetup(repo, worktree, "me/feature", "feature", nil)
 	require.NoError(t, err)
 	require.False(t, ran)
 	require.Empty(t, logPath)
@@ -45,7 +45,7 @@ printf '%s\n' "$CS_WORKTREE_PATH" "$CS_BRANCH" "$CS_SESSION" "$(pwd)" > env.txt
 echo "setup done"
 `, 0755)
 
-	ran, logPath, err := runWorktreeSetup(repo, worktree, "me/feature", "feature")
+	ran, logPath, err := runWorktreeSetup(repo, worktree, "me/feature", "feature", nil)
 	require.NoError(t, err)
 	require.True(t, ran)
 
@@ -68,7 +68,7 @@ func TestWorktreeSetupNonExecutableRunsWithSh(t *testing.T) {
 	repo, worktree := newSetupFixture(t)
 	writeSetupScript(t, repo, "touch ran-with-sh\n", 0644)
 
-	ran, _, err := runWorktreeSetup(repo, worktree, "b", "s")
+	ran, _, err := runWorktreeSetup(repo, worktree, "b", "s", nil)
 	require.NoError(t, err)
 	require.True(t, ran)
 	require.FileExists(t, filepath.Join(worktree, "ran-with-sh"))
@@ -78,7 +78,7 @@ func TestWorktreeSetupFailureReportsLog(t *testing.T) {
 	repo, worktree := newSetupFixture(t)
 	writeSetupScript(t, repo, "#!/bin/sh\necho 'pnpm: not found' >&2\nexit 3\n", 0755)
 
-	ran, logPath, err := runWorktreeSetup(repo, worktree, "b", "s")
+	ran, logPath, err := runWorktreeSetup(repo, worktree, "b", "s", nil)
 	require.True(t, ran)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), logPath)
@@ -92,7 +92,7 @@ func TestWorktreeSetupTimeout(t *testing.T) {
 	writeSetupScript(t, repo, "#!/bin/sh\nexec sleep 30\n", 0755)
 
 	start := time.Now()
-	ran, _, err := runWorktreeSetupWithTimeout(repo, worktree, "b", "s", 200*time.Millisecond)
+	ran, _, err := runWorktreeSetupWithTimeout(repo, worktree, "b", "s", 200*time.Millisecond, nil)
 	require.True(t, ran)
 	require.ErrorContains(t, err, "timed out")
 	require.Less(t, time.Since(start), 10*time.Second)

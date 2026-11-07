@@ -131,11 +131,12 @@ func newHome(ctx context.Context, program string, autoYes bool) *home {
 		os.Exit(1)
 	}
 
+	preview := ui.NewPreviewPane()
 	h := &home{
 		ctx:          ctx,
 		spinner:      spinner.New(spinner.WithSpinner(spinner.MiniDot)),
 		menu:         ui.NewMenu(),
-		tabbedWindow: ui.NewTabbedWindow(ui.NewPreviewPane(), ui.NewDiffPane(), ui.NewTerminalPane()),
+		tabbedWindow: ui.NewTabbedWindow(preview, ui.NewDiffPane(), ui.NewTerminalPane()),
 		errBox:       ui.NewErrBox(),
 		storage:      storage,
 		appConfig:    appConfig,
@@ -145,6 +146,7 @@ func newHome(ctx context.Context, program string, autoYes bool) *home {
 		appState:     appState,
 	}
 	h.list = ui.NewList(&h.spinner, autoYes)
+	preview.SetSpinner(&h.spinner)
 	h.repoName = filepath.Base(repoRoot)
 	h.list.SetRepoName(h.repoName)
 

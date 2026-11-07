@@ -20,12 +20,13 @@ const setupTimeout = 15 * time.Minute
 
 // runWorktreeSetup runs the repository's setup script, if it has one, inside a freshly
 // created worktree. The script's output goes to a log file whose path is returned. ran is
-// false when the repository has no setup script.
-func runWorktreeSetup(repoPath, worktreePath, branch, sessionTitle string) (ran bool, logPath string, err error) {
-	return runWorktreeSetupWithTimeout(repoPath, worktreePath, branch, sessionTitle, setupTimeout)
+// false when the repository has no setup script. onLog, if not nil, is called with the log
+// path once the log file exists, so progress can be shown while the script runs.
+func runWorktreeSetup(repoPath, worktreePath, branch, sessionTitle string, onLog func(logPath string)) (ran bool, logPath string, err error) {
+	return runWorktreeSetupWithTimeout(repoPath, worktreePath, branch, sessionTitle, setupTimeout, onLog)
 }
 
-func runWorktreeSetupWithTimeout(repoPath, worktreePath, branch, sessionTitle string, timeout time.Duration) (ran bool, logPath string, err error) {
+func runWorktreeSetupWithTimeout(repoPath, worktreePath, branch, sessionTitle string, timeout time.Duration, onLog func(logPath string)) (ran bool, logPath string, err error) {
 	script := filepath.Join(repoPath, SetupScriptPath)
 	info, err := os.Stat(script)
 	if errors.Is(err, os.ErrNotExist) {
@@ -52,6 +53,9 @@ func runWorktreeSetupWithTimeout(repoPath, worktreePath, branch, sessionTitle st
 		return true, "", fmt.Errorf("failed to create setup log: %w", err)
 	}
 	defer logFile.Close()
+	if onLog != nil {
+		onLog(logPath)
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()

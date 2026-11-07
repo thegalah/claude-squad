@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/lipgloss"
@@ -242,6 +243,11 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool, h
 	}
 
 	branchLine := fmt.Sprintf("%s %s-%s%s%s", strings.Repeat(" ", len(prefix)), branchIcon, branch, spaces, diff)
+	if i.Status == session.Loading {
+		// The branch isn't interesting yet: say what setup is doing instead, so a slow start
+		// (e.g. a long setup script) doesn't look like a hang.
+		branchLine = loadingLine(i, len(prefix), r.width)
+	}
 
 	// join title and subtitle
 	text := lipgloss.JoinVertical(
@@ -251,6 +257,24 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool, h
 	)
 
 	return text
+}
+
+// loadingLine renders the second line of an instance that is still being set up, e.g.
+// "     running setup.sh · 12s", padded or truncated to width.
+func loadingLine(i *session.Instance, indent, width int) string {
+	prog := i.StartProgress()
+	text := session.StageShortLabel(prog.Stage, i.Program) + "…"
+	if !prog.StartedAt.IsZero() {
+		text += " " + session.FormatElapsed(time.Since(prog.StartedAt))
+	}
+	line := strings.Repeat(" ", indent) + " " + text
+	if width <= 0 {
+		return line
+	}
+	if runewidth.StringWidth(line) > width {
+		return runewidth.Truncate(line, width, "…")
+	}
+	return line + strings.Repeat(" ", width-runewidth.StringWidth(line))
 }
 
 func (l *List) String() string {

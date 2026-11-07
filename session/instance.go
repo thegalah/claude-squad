@@ -11,6 +11,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/atotto/clipboard"
@@ -62,6 +63,11 @@ type Instance struct {
 	// setupErr is set when the repository's worktree setup script failed during Start. The
 	// session still starts; the app reports the error via TakeSetupError.
 	setupErr error
+
+	// progressMu guards progress, which Start updates from a background goroutine while
+	// the UI reads it.
+	progressMu sync.Mutex
+	progress   StartProgress
 
 	// The below fields are initialized upon calling Start().
 
@@ -220,6 +226,7 @@ func (i *Instance) Start(firstTimeSetup bool) error {
 	i.tmuxSession = tmuxSession
 
 	if firstTimeSetup {
+		i.setStartStage(StageWorktree)
 		if i.selectedBranch != "" {
 			gitWorktree, err := git.NewGitWorktreeFromBranch(i.Path, i.selectedBranch, i.Title)
 			if err != nil {
@@ -235,6 +242,7 @@ func (i *Instance) Start(firstTimeSetup bool) error {
 			i.gitWorktree = gitWorktree
 			i.Branch = branchName
 		}
+		i.setHasSetupScript(hasSetupScript(i.gitWorktree.GetRepoPath()))
 	}
 
 	// Setup error handler to cleanup resources on any error
@@ -274,8 +282,11 @@ func (i *Instance) Start(firstTimeSetup bool) error {
 
 		// Prepare the new worktree (copy env files, install dependencies, ...) before the
 		// program starts. A failing script is reported but doesn't stop the session.
+		if hasSetupScript(i.gitWorktree.GetRepoPath()) {
+			i.setStartStage(StageSetupScript)
+		}
 		if ran, _, err := runWorktreeSetup(i.gitWorktree.GetRepoPath(), i.gitWorktree.GetWorktreePath(),
-			i.gitWorktree.GetBranchName(), i.Title); err != nil {
+			i.gitWorktree.GetBranchName(), i.Title, i.setSetupLogPath); err != nil {
 			log.WarningLog.Printf("worktree setup for %q: %v", i.Title, err)
 			i.setupErr = err
 		} else if ran {
@@ -283,6 +294,7 @@ func (i *Instance) Start(firstTimeSetup bool) error {
 		}
 
 		// Create new session
+		i.setStartStage(StageProgram)
 		if err := i.tmuxSession.Start(i.gitWorktree.GetWorktreePath()); err != nil {
 			// Cleanup git worktree if tmux session creation fails
 			if cleanupErr := i.gitWorktree.Cleanup(); cleanupErr != nil {
