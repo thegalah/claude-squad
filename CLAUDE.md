@@ -22,6 +22,7 @@ To pull upstream changes in: `git fetch upstream && git merge upstream/main` on 
 - **Terminal title**: `cs · <repo>` (set on startup and re-set after detaching from a session), so terminal tabs can be told apart.
 - **`cs prune`**: removes worktree directories under `~/.claude-squad/worktrees` that no saved session (in any repo) uses (`session/git/leftover.go`). Keeps branches; skips dirty/detached worktrees unless `--force`; ignores directories changed in the last 10 minutes; leaves non-cs-named directories alone. The TUI shows a notice on startup when leftovers exist.
 - **Worktree setup script**: if a repo has `.claude-squad/setup.sh` (read from the main checkout), it runs in each new session's worktree after creation and before the program starts (`session/setup.go`), with `CS_REPO_PATH`, `CS_WORKTREE_PATH`, `CS_BRANCH`, `CS_SESSION`. Output goes to `~/.claude-squad/setup-logs/`; a failure or 15-minute timeout is reported but doesn't stop the session. Not run on resume.
+- **Setup progress**: while a new instance is starting, the list row shows the current step and elapsed time (`running setup.sh… 12s`) instead of the branch, and the preview pane shows a step checklist with timings plus the live tail of the setup script's log (`session/progress.go`, `ui/progress.go`).
 
 ## Development workflow
 
