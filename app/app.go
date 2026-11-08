@@ -29,7 +29,7 @@ func Run(ctx context.Context, program string, autoYes bool) error {
 	p := tea.NewProgram(
 		newHome(ctx, program, autoYes),
 		tea.WithAltScreen(),
-		tea.WithMouseCellMotion(), // Mouse scroll
+		tea.WithMouseAllMotion(), // Mouse scroll, tab clicks and tab hover
 	)
 	_, err := p.Run()
 	return err
@@ -169,13 +169,27 @@ func newHome(ctx context.Context, program string, autoYes bool) *home {
 	return h
 }
 
+// tabAt returns the tab at screen position (x, y), or -1.
+func (m *home) tabAt(x, y int) int {
+	// View() renders the tabbed window to the right of the list, one line down.
+	return m.tabbedWindow.TabAt(x-m.list.Width(), y-1)
+}
+
+// handleTabHover highlights the tab under the mouse pointer at (x, y).
+func (m *home) handleTabHover(x, y int) {
+	tab := -1
+	if m.state == stateDefault {
+		tab = m.tabAt(x, y)
+	}
+	m.tabbedWindow.SetHoverTab(tab)
+}
+
 // handleTabClick switches to the tab clicked at screen position (x, y), if any.
 func (m *home) handleTabClick(x, y int) tea.Cmd {
 	if m.state != stateDefault {
 		return nil
 	}
-	// View() renders the tabbed window to the right of the list, one line down.
-	tab := m.tabbedWindow.TabAt(x-m.list.Width(), y-1)
+	tab := m.tabAt(x, y)
 	if tab < 0 || tab == m.tabbedWindow.GetActiveTab() {
 		return nil
 	}
@@ -345,6 +359,10 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, tickUpdateMetadataCmd(m.snapshotActiveInstances(), m.list.GetSelectedInstance())
 	case tea.MouseMsg:
+		if msg.Action == tea.MouseActionMotion {
+			m.handleTabHover(msg.X, msg.Y)
+			return m, nil
+		}
 		if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
 			return m, m.handleTabClick(msg.X, msg.Y)
 		}
