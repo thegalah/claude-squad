@@ -42,8 +42,15 @@ const (
 	StatePrompt
 )
 
+// menuGroup is a run of menu options; groups are separated by a vertical bar.
+type menuGroup struct {
+	options []keys.KeyName
+	// action groups are highlighted.
+	action bool
+}
+
 type Menu struct {
-	options       []keys.KeyName
+	groups        []menuGroup
 	height, width int
 	state         MenuState
 	instance      *session.Instance
@@ -53,13 +60,19 @@ type Menu struct {
 	keyDown keys.KeyName
 }
 
-var defaultMenuOptions = []keys.KeyName{keys.KeyNew, keys.KeyPrompt, keys.KeyHelp, keys.KeyQuit}
-var newInstanceMenuOptions = []keys.KeyName{keys.KeySubmitName}
-var promptMenuOptions = []keys.KeyName{keys.KeySubmitName}
+// systemOptions end every menu that isn't asking for input.
+var systemOptions = []keys.KeyName{keys.KeyPrune, keys.KeyHelp, keys.KeyQuit}
+
+var defaultMenuGroups = []menuGroup{
+	{options: []keys.KeyName{keys.KeyNew, keys.KeyPrompt}, action: true},
+	{options: systemOptions},
+}
+var newInstanceMenuGroups = []menuGroup{{options: []keys.KeyName{keys.KeySubmitName}}}
+var promptMenuGroups = []menuGroup{{options: []keys.KeyName{keys.KeySubmitName}}}
 
 func NewMenu() *Menu {
 	return &Menu{
-		options:   defaultMenuOptions,
+		groups:    defaultMenuGroups,
 		state:     StateEmpty,
 		activeTab: 0,
 		keyDown:   -1,
@@ -104,53 +117,56 @@ func (m *Menu) SetActiveTab(tab int) {
 func (m *Menu) updateOptions() {
 	switch m.state {
 	case StateEmpty:
-		m.options = defaultMenuOptions
+		m.groups = defaultMenuGroups
 	case StateDefault:
 		if m.instance != nil {
 			// When there is an instance, show that instance's options
 			m.addInstanceOptions()
 		} else {
 			// When there is no instance, show the empty state
-			m.options = defaultMenuOptions
+			m.groups = defaultMenuGroups
 		}
 	case StateNewInstance:
-		m.options = newInstanceMenuOptions
+		m.groups = newInstanceMenuGroups
 	case StatePrompt:
-		m.options = promptMenuOptions
+		m.groups = promptMenuGroups
 	}
 }
 
 func (m *Menu) addInstanceOptions() {
 	// Loading instances only get minimal options
 	if m.instance != nil && m.instance.Status == session.Loading {
-		m.options = []keys.KeyName{keys.KeyNew, keys.KeyHelp, keys.KeyQuit}
+		m.groups = []menuGroup{
+			{options: []keys.KeyName{keys.KeyNew}},
+			{options: systemOptions},
+		}
 		return
 	}
 
 	// Instance management group
-	options := []keys.KeyName{keys.KeyNew, keys.KeyKill}
+	management := []keys.KeyName{keys.KeyNew, keys.KeyKill}
 
 	// Action group
-	actionGroup := []keys.KeyName{keys.KeyEnter, keys.KeySubmit}
+	actions := []keys.KeyName{keys.KeyEnter, keys.KeySubmit}
 	if m.instance.Status == session.Paused {
-		actionGroup = append(actionGroup, keys.KeyResume)
+		actions = append(actions, keys.KeyResume)
 	} else {
-		actionGroup = append(actionGroup, keys.KeyCheckout)
+		actions = append(actions, keys.KeyCheckout)
 	}
 
-	// Navigation group (when in diff tab)
+	// System group, with scrolling first when the tab supports it
+	var system []keys.KeyName
 	if m.activeTab == DiffTab || m.activeTab == TerminalTab {
-		actionGroup = append(actionGroup, keys.KeyShiftUp)
+		system = append(system, keys.KeyShiftUp)
 	}
+	system = append(system, keys.KeyTab)
+	system = append(system, systemOptions...)
 
-	// System group
-	systemGroup := []keys.KeyName{keys.KeyTab, keys.KeyHelp, keys.KeyQuit}
-
-	// Combine all groups
-	options = append(options, actionGroup...)
-	options = append(options, systemGroup...)
-
-	m.options = options
+	m.groups = []menuGroup{
+		{options: management},
+		{options: actions, action: true},
+		{options: system},
+	}
 }
 
 // SetSize sets the width of the window. The menu will be centered horizontally within this width.
@@ -162,63 +178,27 @@ func (m *Menu) SetSize(width, height int) {
 func (m *Menu) String() string {
 	var s strings.Builder
 
-	// Define group boundaries
-	groups := []struct {
-		start int
-		end   int
-	}{
-		{0, 2}, // Instance management group (n, d)
-		{2, 5}, // Action group (enter, submit, pause/resume)
-		{6, 8}, // System group (tab, help, q)
-	}
-
-	for i, k := range m.options {
-		binding := keys.GlobalkeyBindings[k]
-
-		var (
-			localActionStyle = actionGroupStyle
-			localKeyStyle    = keyStyle
-			localDescStyle   = descStyle
-		)
-		if m.keyDown == k {
-			localActionStyle = localActionStyle.Underline(true)
-			localKeyStyle = localKeyStyle.Underline(true)
-			localDescStyle = localDescStyle.Underline(true)
+	for g, group := range m.groups {
+		if g > 0 {
+			s.WriteString(sepStyle.Render(verticalSeparator))
 		}
+		for i, k := range group.options {
+			if i > 0 {
+				s.WriteString(sepStyle.Render(separator))
+			}
+			binding := keys.GlobalkeyBindings[k]
 
-		var inActionGroup bool
-		switch m.state {
-		case StateEmpty:
-			// For empty state, the action group is the first group
-			inActionGroup = i <= 1
-		default:
-			// For other states, the action group is the second group
-			inActionGroup = i >= groups[1].start && i < groups[1].end
-		}
-
-		if inActionGroup {
-			s.WriteString(localActionStyle.Render(binding.Help().Key))
-			s.WriteString(" ")
-			s.WriteString(localActionStyle.Render(binding.Help().Desc))
-		} else {
+			localKeyStyle, localDescStyle := keyStyle, descStyle
+			if group.action {
+				localKeyStyle, localDescStyle = actionGroupStyle, actionGroupStyle
+			}
+			if m.keyDown == k {
+				localKeyStyle = localKeyStyle.Underline(true)
+				localDescStyle = localDescStyle.Underline(true)
+			}
 			s.WriteString(localKeyStyle.Render(binding.Help().Key))
 			s.WriteString(" ")
 			s.WriteString(localDescStyle.Render(binding.Help().Desc))
-		}
-
-		// Add appropriate separator
-		if i != len(m.options)-1 {
-			isGroupEnd := false
-			for _, group := range groups {
-				if i == group.end-1 {
-					s.WriteString(sepStyle.Render(verticalSeparator))
-					isGroupEnd = true
-					break
-				}
-			}
-			if !isGroupEnd {
-				s.WriteString(sepStyle.Render(separator))
-			}
 		}
 	}
 
