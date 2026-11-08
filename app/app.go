@@ -26,13 +26,19 @@ const GlobalInstanceLimit = 10
 
 // Run is the main entrypoint into the application.
 func Run(ctx context.Context, program string, autoYes bool) error {
+	h := newHome(ctx, program, autoYes)
 	p := tea.NewProgram(
-		newHome(ctx, program, autoYes),
+		h,
 		tea.WithAltScreen(),
 		tea.WithMouseAllMotion(), // Mouse scroll, tab clicks and tab hover
 	)
-	_, err := p.Run()
-	return err
+	if _, err := p.Run(); err != nil {
+		return err
+	}
+	if h.exeWatch != nil && h.exeWatch.restart {
+		return execRestart(h.exeWatch.path)
+	}
+	return nil
 }
 
 type state int
@@ -65,6 +71,8 @@ type home struct {
 	appConfig *config.Config
 	// appState stores persistent application state like seen help screens
 	appState config.AppState
+	// exeWatch restarts cs when its executable is replaced. nil disables it.
+	exeWatch *exeWatch
 
 	// -- State --
 
@@ -144,6 +152,7 @@ func newHome(ctx context.Context, program string, autoYes bool) *home {
 		autoYes:      autoYes,
 		state:        stateDefault,
 		appState:     appState,
+		exeWatch:     newExeWatch(),
 	}
 	h.list = ui.NewList(&h.spinner, autoYes)
 	preview.SetSpinner(&h.spinner)
@@ -230,7 +239,7 @@ func (m *home) updateHandleWindowSizeEvent(msg tea.WindowSizeMsg) {
 func (m *home) Init() tea.Cmd {
 	// Upon starting, we want to start the spinner. Whenever we get a spinner.TickMsg, we
 	// update the spinner, which sends a new spinner.TickMsg. I think this lasts forever lol.
-	return tea.Batch(
+	cmds := []tea.Cmd{
 		m.setWindowTitle(),
 		m.spinner.Tick,
 		func() tea.Msg {
@@ -239,8 +248,18 @@ func (m *home) Init() tea.Cmd {
 		},
 		tickUpdateMetadataCmd(m.snapshotActiveInstances(), m.list.GetSelectedInstance()),
 		checkLeftoverWorktreesCmd,
-	)
+	}
+	if m.exeWatch != nil {
+		cmds = append(cmds, m.exeWatch.checkCmd())
+	}
+	if notice := restartedNotice(); notice != "" {
+		cmds = append(cmds, func() tea.Msg { return restartedMsg{notice: notice} })
+	}
+	return tea.Batch(cmds...)
 }
+
+// restartedMsg shows a notice after cs restarted itself for an update.
+type restartedMsg struct{ notice string }
 
 // windowTitle is the terminal window/tab title, e.g. "cs · claude-squad".
 func windowTitle(repoName string) string {
@@ -285,6 +304,19 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case hideErrMsg:
 		m.errBox.Clear()
+	case exeCheckMsg:
+		return m, m.handleExeCheck(msg)
+	case exeVerifiedMsg:
+		return m, m.handleExeVerified(msg)
+	case restartedMsg:
+		m.errBox.SetInfo(msg.notice)
+		return m, func() tea.Msg {
+			select {
+			case <-m.ctx.Done():
+			case <-time.After(5 * time.Second):
+			}
+			return hideErrMsg{}
+		}
 	case leftoverWorktreesMsg:
 		if msg.count == 0 {
 			return m, nil
