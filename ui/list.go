@@ -110,6 +110,11 @@ func (l *List) SetSize(width, height int) {
 	l.renderer.setWidth(width)
 }
 
+// Width returns the rendered width of the list.
+func (l *List) Width() int {
+	return l.width
+}
+
 // SetSessionPreviewSize sets the height and width for the tmux sessions. This makes the stdout line have the correct
 // width and height.
 func (l *List) SetSessionPreviewSize(width, height int) (err error) {

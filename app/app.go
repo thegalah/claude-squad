@@ -169,6 +169,21 @@ func newHome(ctx context.Context, program string, autoYes bool) *home {
 	return h
 }
 
+// handleTabClick switches to the tab clicked at screen position (x, y), if any.
+func (m *home) handleTabClick(x, y int) tea.Cmd {
+	if m.state != stateDefault {
+		return nil
+	}
+	// View() renders the tabbed window to the right of the list, one line down.
+	tab := m.tabbedWindow.TabAt(x-m.list.Width(), y-1)
+	if tab < 0 || tab == m.tabbedWindow.GetActiveTab() {
+		return nil
+	}
+	m.tabbedWindow.SetActiveTab(tab)
+	m.menu.SetActiveTab(tab)
+	return m.instanceChanged()
+}
+
 // updateHandleWindowSizeEvent sets the sizes of the components.
 // The components will try to render inside their bounds.
 func (m *home) updateHandleWindowSizeEvent(msg tea.WindowSizeMsg) {
@@ -330,6 +345,9 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, tickUpdateMetadataCmd(m.snapshotActiveInstances(), m.list.GetSelectedInstance())
 	case tea.MouseMsg:
+		if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
+			return m, m.handleTabClick(msg.X, msg.Y)
+		}
 		// Handle mouse wheel events for scrolling the diff/preview pane
 		if msg.Action == tea.MouseActionPress {
 			if msg.Button == tea.MouseButtonWheelDown || msg.Button == tea.MouseButtonWheelUp {

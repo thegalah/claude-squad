@@ -103,6 +103,50 @@ func (w *TabbedWindow) Toggle() {
 	w.activeTab = (w.activeTab + 1) % len(w.tabs)
 }
 
+// SetActiveTab selects the tab at index tab. Out-of-range indexes are ignored.
+func (w *TabbedWindow) SetActiveTab(tab int) {
+	if tab < 0 || tab >= len(w.tabs) {
+		return
+	}
+	w.activeTab = tab
+}
+
+// tabRowOffset is the number of lines String() renders above the tab row.
+const tabRowOffset = 2
+
+// tabWidths returns the rendered width of each tab, in order.
+func (w *TabbedWindow) tabWidths() []int {
+	totalTabWidth := w.width + windowStyle.GetHorizontalFrameSize()
+	tabWidth := totalTabWidth / len(w.tabs)
+	widths := make([]int, len(w.tabs))
+	for i := range widths {
+		widths[i] = tabWidth
+	}
+	widths[len(widths)-1] = totalTabWidth - tabWidth*(len(w.tabs)-1)
+	return widths
+}
+
+// TabAt returns the index of the tab rendered at (x, y), where the coordinates
+// are relative to the top-left corner of String()'s output. It returns -1 if
+// (x, y) isn't on a tab.
+func (w *TabbedWindow) TabAt(x, y int) int {
+	if w.width == 0 || w.height == 0 || x < 0 {
+		return -1
+	}
+	tabHeight := activeTabStyle.GetVerticalFrameSize() + 1
+	if y < tabRowOffset || y >= tabRowOffset+tabHeight {
+		return -1
+	}
+	left := 0
+	for i, width := range w.tabWidths() {
+		if x < left+width {
+			return i
+		}
+		left += width
+	}
+	return -1
+}
+
 // UpdatePreview updates the content of the preview pane. instance may be nil.
 func (w *TabbedWindow) UpdatePreview(instance *session.Instance) error {
 	if w.activeTab != PreviewTab {
@@ -221,16 +265,11 @@ func (w *TabbedWindow) String() string {
 
 	var renderedTabs []string
 
-	totalTabWidth := w.width + windowStyle.GetHorizontalFrameSize()
-	tabWidth := totalTabWidth / len(w.tabs)
-	lastTabWidth := totalTabWidth - tabWidth*(len(w.tabs)-1)
+	tabWidths := w.tabWidths()
 	tabHeight := activeTabStyle.GetVerticalFrameSize() + 1 // get padding border margin size + 1 for character height
 
 	for i, t := range w.tabs {
-		width := tabWidth
-		if i == len(w.tabs)-1 {
-			width = lastTabWidth
-		}
+		width := tabWidths[i]
 
 		var style lipgloss.Style
 		isFirst, isLast, isActive := i == 0, i == len(w.tabs)-1, i == w.activeTab
@@ -269,5 +308,6 @@ func (w *TabbedWindow) String() string {
 			w.width, w.height-2-windowStyle.GetVerticalFrameSize()-tabHeight,
 			lipgloss.Left, lipgloss.Top, content))
 
+	// "\n" renders as tabRowOffset blank lines above the tab row.
 	return lipgloss.JoinVertical(lipgloss.Left, "\n", row, window)
 }
