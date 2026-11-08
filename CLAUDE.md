@@ -24,6 +24,7 @@ To pull upstream changes in: `git fetch upstream && git merge upstream/main` on 
 - **Worktree setup script**: if a repo has `.claude-squad/setup.sh` (read from the main checkout), it runs in each new session's worktree after creation and before the program starts (`session/setup.go`), with `CS_REPO_PATH`, `CS_WORKTREE_PATH`, `CS_BRANCH`, `CS_SESSION`. Output goes to `~/.claude-squad/setup-logs/`; a failure or 15-minute timeout is reported but doesn't stop the session. Not run on resume.
 - **Setup progress**: while a new instance is starting, the list row shows the current step and elapsed time (`running setup.sh… 12s`) instead of the branch, and the preview pane shows a step checklist with timings plus the live tail of the setup script's log (`session/progress.go`, `ui/progress.go`).
 - **Clickable tabs**: left-clicking the Preview / Diff / Terminal tabs switches to that tab, and hovering an inactive tab highlights it (`TabbedWindow.TabAt`, `home.handleTabClick`, `home.handleTabHover`). Hover needs `tea.WithMouseAllMotion`. Both are ignored while an overlay is open.
+- **Auto-restart on new binary**: `cs` watches its own executable and, when it's replaced (e.g. `go build -o ~/.local/bin/cs .`), saves and re-execs itself in the same terminal (`app/restart.go`). It waits until the file stops changing and `cs version` succeeds on it, and until it's idle: no overlay/prompt open, no instance starting, not attached. Instances live in tmux, so they're unaffected. The restarted process shows a notice.
 
 ## Development workflow
 
@@ -45,10 +46,11 @@ Tooling: Go via mise (`mise install` in this folder), plus tmux, git and gh. Nod
    gh pr merge <url> -R thegalah/claude-squad --squash --delete-branch
    git checkout main && git pull origin main && git branch -D <branch>
    ```
-5. Rebuild and install the local binary from `main`, then restart any open `cs` windows:
+5. Rebuild and install the local binary from `main`:
    ```sh
    go build -o ~/.local/bin/cs .
    ```
+   Open `cs` windows restart themselves onto the new binary within a few seconds (once idle).
 
 Don't bump the version (`bump-version.sh`) or touch release workflows; those are upstream's release process.
 
