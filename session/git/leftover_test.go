@@ -76,6 +76,9 @@ func TestFindLeftoverWorktrees(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dirty, "new.txt"), []byte("wip"), 0644))
 	detached := f.addWorktree(t, "detached_18e0c5f0e0b3528f", "detached")
 	mustRunGit(t, detached, "checkout", "-q", "--detach")
+	orphan := f.addWorktree(t, "orphan_18e0c5f0e0b3528f", "orphan")
+	mustRunGit(t, orphan, "checkout", "-q", "--detach")
+	mustRunGit(t, orphan, "commit", "-q", "--allow-empty", "-m", "only on the detached HEAD")
 	f.mkdir(t, "me/broken_18dec0c4da4ea3fc", "leftover.txt") // cs-named, no .git
 	f.mkdir(t, "me/empty-prefix")                            // empty directory
 	f.mkdir(t, "me/k206", "page_to_pdf.py")                  // not cs-named: left alone
@@ -88,6 +91,7 @@ func TestFindLeftoverWorktrees(t *testing.T) {
 		"me/clean_18e0c5f0e0b3528f",
 		"me/dirty_18e0c5f0e0b3528f",
 		"me/empty-prefix",
+		"orphan_18e0c5f0e0b3528f",
 	}, leftoverPaths(f.root, got))
 
 	clean := byRel(t, f.root, got, "me/clean_18e0c5f0e0b3528f")
@@ -95,10 +99,20 @@ func TestFindLeftoverWorktrees(t *testing.T) {
 	require.Equal(t, "me/clean", clean.Branch)
 	require.False(t, clean.NeedsForce())
 
-	require.True(t, byRel(t, f.root, got, "me/dirty_18e0c5f0e0b3528f").Dirty)
-	require.True(t, byRel(t, f.root, got, "me/dirty_18e0c5f0e0b3528f").NeedsForce())
-	require.True(t, byRel(t, f.root, got, "detached_18e0c5f0e0b3528f").Detached)
-	require.True(t, byRel(t, f.root, got, "detached_18e0c5f0e0b3528f").NeedsForce())
+	dirtyW := byRel(t, f.root, got, "me/dirty_18e0c5f0e0b3528f")
+	require.True(t, dirtyW.Dirty)
+	require.Equal(t, 1, dirtyW.Changes)
+	require.True(t, dirtyW.NeedsForce())
+
+	detachedW := byRel(t, f.root, got, "detached_18e0c5f0e0b3528f")
+	require.True(t, detachedW.Detached)
+	require.False(t, detachedW.Unreachable, "its commit is on branch detached")
+	require.False(t, detachedW.NeedsForce())
+
+	orphanW := byRel(t, f.root, got, "orphan_18e0c5f0e0b3528f")
+	require.True(t, orphanW.Detached)
+	require.True(t, orphanW.Unreachable)
+	require.True(t, orphanW.NeedsForce())
 
 	broken := byRel(t, f.root, got, "me/broken_18dec0c4da4ea3fc")
 	require.False(t, broken.Valid)

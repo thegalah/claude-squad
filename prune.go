@@ -124,11 +124,13 @@ func describeLeftover(w git.LeftoverWorktree) string {
 	if w.Branch != "" {
 		parts = append(parts, "branch "+w.Branch)
 	}
-	if w.Detached {
+	if w.Unreachable {
+		parts = append(parts, "detached HEAD on a commit no branch has")
+	} else if w.Detached {
 		parts = append(parts, "detached HEAD")
 	}
 	if w.Dirty {
-		parts = append(parts, "uncommitted changes")
+		parts = append(parts, git.DescribeChanges(w.Changes))
 	}
 	parts = append(parts, "last changed "+w.ModTime.Format("2006-01-02"))
 	return strings.Join(parts, ", ")
