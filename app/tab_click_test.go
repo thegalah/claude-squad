@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 	"github.com/stretchr/testify/require"
 )
 
@@ -29,7 +30,8 @@ func tabPosition(t *testing.T, view, name string) (x, y int) {
 	return 0, 0
 }
 
-func TestClickingTabSelectsIt(t *testing.T) {
+func newTabTestHome(t *testing.T) *home {
+	t.Helper()
 	s := spinner.New(spinner.WithSpinner(spinner.MiniDot))
 	h := &home{
 		ctx:          context.Background(),
@@ -41,6 +43,11 @@ func TestClickingTabSelectsIt(t *testing.T) {
 		state:        stateDefault,
 	}
 	h.updateHandleWindowSizeEvent(tea.WindowSizeMsg{Width: 160, Height: 50})
+	return h
+}
+
+func TestClickingTabSelectsIt(t *testing.T) {
+	h := newTabTestHome(t)
 
 	click := func(x, y int) {
 		_, _ = h.Update(tea.MouseMsg{X: x, Y: y, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
@@ -69,4 +76,40 @@ func TestClickingTabSelectsIt(t *testing.T) {
 	h.state = stateHelp
 	click(x, y)
 	require.Equal(t, ui.DiffTab, h.tabbedWindow.GetActiveTab())
+}
+
+func TestHoveringTabHighlightsIt(t *testing.T) {
+	// Tests don't run in a TTY, so lipgloss would strip all styling.
+	prev := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.ANSI256)
+	t.Cleanup(func() { lipgloss.SetColorProfile(prev) })
+
+	h := newTabTestHome(t)
+	move := func(x, y int) {
+		_, _ = h.Update(tea.MouseMsg{X: x, Y: y, Action: tea.MouseActionMotion, Button: tea.MouseButtonNone})
+	}
+
+	plain := h.View()
+	diffX, diffY := tabPosition(t, plain, "Diff")
+	previewX, previewY := tabPosition(t, plain, "Preview")
+
+	move(diffX, diffY)
+	hovered := h.View()
+	require.NotEqual(t, plain, hovered, "hovering an inactive tab should highlight it")
+	require.Equal(t, ui.PreviewTab, h.tabbedWindow.GetActiveTab(), "hovering must not switch tabs")
+
+	// Hovering the active tab looks the same as not hovering.
+	move(previewX, previewY)
+	require.Equal(t, plain, h.View())
+
+	// Moving off the tabs clears the highlight.
+	move(diffX, diffY)
+	move(diffX, diffY+5)
+	require.Equal(t, plain, h.View())
+
+	// No highlight while an overlay is open.
+	h.state = stateHelp
+	move(diffX, diffY)
+	h.state = stateDefault
+	require.Equal(t, plain, h.View())
 }

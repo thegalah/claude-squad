@@ -47,8 +47,10 @@ type TabbedWindow struct {
 	tabs []string
 
 	activeTab int
-	height    int
-	width     int
+	// hoverTab is the tab under the mouse pointer, or -1.
+	hoverTab int
+	height   int
+	width    int
 
 	preview  *PreviewPane
 	diff     *DiffPane
@@ -63,6 +65,7 @@ func NewTabbedWindow(preview *PreviewPane, diff *DiffPane, terminal *TerminalPan
 			"Diff",
 			"Terminal",
 		},
+		hoverTab: -1,
 		preview:  preview,
 		diff:     diff,
 		terminal: terminal,
@@ -109,6 +112,14 @@ func (w *TabbedWindow) SetActiveTab(tab int) {
 		return
 	}
 	w.activeTab = tab
+}
+
+// SetHoverTab marks the tab under the mouse pointer; -1 means none.
+func (w *TabbedWindow) SetHoverTab(tab int) {
+	if tab < -1 || tab >= len(w.tabs) {
+		tab = -1
+	}
+	w.hoverTab = tab
 }
 
 // tabRowOffset is the number of lines String() renders above the tab row.
@@ -289,6 +300,9 @@ func (w *TabbedWindow) String() string {
 			border.BottomRight = "┤"
 		}
 		style = style.Border(border)
+		if i == w.hoverTab && !isActive {
+			style = style.Foreground(highlightColor).Bold(true).Underline(true)
+		}
 		style = style.Width(width - style.GetHorizontalFrameSize())
 		renderedTabs = append(renderedTabs, style.Render(t))
 	}
