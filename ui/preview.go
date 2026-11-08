@@ -257,6 +257,14 @@ func (p *PreviewPane) ScrollDown(instance *session.Instance) error {
 	return nil
 }
 
+// ExitScrollMode leaves scroll mode without fetching content; the next
+// UpdateContent shows the live pane again.
+func (p *PreviewPane) ExitScrollMode() {
+	p.isScrolling = false
+	p.viewport.SetContent("")
+	p.viewport.GotoTop()
+}
+
 // ResetToNormalMode exits scroll mode and returns to normal mode
 func (p *PreviewPane) ResetToNormalMode(instance *session.Instance) error {
 	if instance == nil || instance.Status == session.Paused {

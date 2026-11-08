@@ -181,6 +181,14 @@ func (w *TabbedWindow) UpdateTerminal(instance *session.Instance) error {
 	return w.terminal.UpdateContent(instance)
 }
 
+// ExitScrollModes leaves scroll mode in the preview and terminal panes, e.g.
+// when another instance is selected, so they show that instance's live output
+// instead of the previous instance's scrollback.
+func (w *TabbedWindow) ExitScrollModes() {
+	w.preview.ExitScrollMode()
+	w.terminal.ResetToNormalMode()
+}
+
 // ResetPreviewToNormalMode resets the preview pane to normal mode
 func (w *TabbedWindow) ResetPreviewToNormalMode(instance *session.Instance) error {
 	return w.preview.ResetToNormalMode(instance)

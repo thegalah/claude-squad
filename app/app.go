@@ -74,6 +74,10 @@ type home struct {
 	// exeWatch restarts cs when its executable is replaced. nil disables it.
 	exeWatch *exeWatch
 
+	// lastSelected is the instance selected at the last instanceChanged, used to
+	// notice when the selection changes.
+	lastSelected *session.Instance
+
 	// termHeight is the terminal height from the last resize.
 	termHeight int
 	// viewOverflow is how many lines the last View() was taller than the
@@ -960,6 +964,11 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 func (m *home) instanceChanged() tea.Cmd {
 	// selected may be nil
 	selected := m.list.GetSelectedInstance()
+	if selected != m.lastSelected {
+		// Scroll mode freezes a pane on the instance it was entered for.
+		m.tabbedWindow.ExitScrollModes()
+		m.lastSelected = selected
+	}
 
 	m.tabbedWindow.UpdateDiff(selected)
 	m.tabbedWindow.SetInstance(selected)
