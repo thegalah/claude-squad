@@ -26,15 +26,19 @@ type LeftoverWorktree struct {
 	Branch string
 	// Dirty is true when a valid worktree has uncommitted changes.
 	Dirty bool
-	// Detached is true when a valid worktree has a detached HEAD, so commits made there
-	// may not be on any branch.
+	// Changes is the number of uncommitted files in a dirty worktree (0 if unknown).
+	Changes int
+	// Detached is true when a valid worktree has a detached HEAD.
 	Detached bool
-	ModTime  time.Time
+	// Unreachable is true when a detached HEAD's commit isn't on any branch (local or
+	// remote), so removing the worktree could lose commits.
+	Unreachable bool
+	ModTime     time.Time
 }
 
 // NeedsForce reports whether removing w could lose work that isn't saved on a branch.
 func (w LeftoverWorktree) NeedsForce() bool {
-	return w.Valid && (w.Dirty || w.Detached)
+	return w.Valid && (w.Dirty || w.Unreachable)
 }
 
 // cs names worktree directories <sanitized branch>_<hex unix nanos>.
@@ -126,15 +130,22 @@ func inspectWorktree(w *LeftoverWorktree) {
 		return
 	}
 	w.Valid = true
-	if status, err := gitOutput(w.Path, "status", "--porcelain"); err != nil || status != "" {
+	if status, err := gitOutput(w.Path, "status", "--porcelain"); err != nil {
 		// Treat an unreadable status as dirty, so removal requires --force.
 		w.Dirty = true
+	} else if status != "" {
+		w.Dirty = true
+		w.Changes = strings.Count(status, "\n") + 1
 	}
 	if branch, err := gitOutput(w.Path, "symbolic-ref", "--short", "-q", "HEAD"); err == nil && branch != "" {
 		w.Branch = branch
-	} else {
-		w.Detached = true
+		return
 	}
+	w.Detached = true
+	// A detached HEAD on a commit that some branch contains loses nothing when removed.
+	onBranch, err := gitOutput(w.Path, "for-each-ref", "--count=1", "--contains", "HEAD", "--format=%(refname)",
+		"refs/heads", "refs/remotes")
+	w.Unreachable = err != nil || onBranch == ""
 }
 
 func gitOutput(dir string, args ...string) (string, error) {
@@ -190,4 +201,16 @@ func removeEmptyParents(root, dir string) {
 func isEmptyDir(dir string) bool {
 	entries, err := os.ReadDir(dir)
 	return err == nil && len(entries) == 0
+}
+
+// DescribeChanges describes a dirty worktree's uncommitted changes.
+func DescribeChanges(n int) string {
+	switch n {
+	case 0:
+		return "uncommitted changes"
+	case 1:
+		return "1 uncommitted file"
+	default:
+		return fmt.Sprintf("%d uncommitted files", n)
+	}
 }

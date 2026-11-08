@@ -70,26 +70,52 @@ func deliver(t *testing.T, h *home, cmd tea.Cmd) tea.Cmd {
 var sampleLeftovers = []git.LeftoverWorktree{
 	{Path: "/wt/a_1234567890", Valid: true, Branch: "a"},
 	{Path: "/wt/b_1234567890"}, // broken
-	{Path: "/wt/c_1234567890", Valid: true, Branch: "c", Dirty: true},
+	{Path: "/wt/me/c_1234567890", Valid: true, Branch: "me/c", Dirty: true, Changes: 1},
+	{Path: "/wt/d_1234567890", Valid: true, Detached: true, Unreachable: true},
 }
 
-func TestPruneKeyRemovesSafeLeftovers(t *testing.T) {
+// confirmText returns the confirmation prompt without the overlay's word
+// wrapping and borders.
+func confirmText(h *home) string {
+	return strings.Join(strings.Fields(strings.ReplaceAll(h.confirmationOverlay.Render(), "│", "")), " ")
+}
+
+func TestPruneKeyRemovesSafeThenUnsavedLeftovers(t *testing.T) {
 	removed := fakePrune(t, sampleLeftovers, nil)
 	h := newPruneTestHome(t)
 
 	deliver(t, h, press(h, "P"))
 	require.Equal(t, stateConfirm, h.state)
-	// Undo the overlay's word wrapping and borders before matching.
-	view := strings.Join(strings.Fields(strings.ReplaceAll(h.confirmationOverlay.Render(), "│", "")), " ")
+	view := confirmText(h)
 	require.Contains(t, view, "Remove 2 leftover worktree(s)?")
-	require.Contains(t, view, "Branches are kept. Skipping 1 with uncommitted changes or a detached HEAD.")
+	require.Contains(t, view, "Branches are kept. 2 more have unsaved work; you'll be asked about them next.")
 	require.Empty(t, *removed, "nothing is removed before confirming")
 
 	cmd := press(h, "y")
-	require.Equal(t, stateDefault, h.state)
+	require.Equal(t, stateConfirm, h.state, "asks about the unsaved ones next")
+	view = confirmText(h)
+	require.Contains(t, view, "Remove 2 leftover worktree(s) with unsaved work?")
+	require.Contains(t, view, "• me/c: 1 uncommitted file")
+	require.Contains(t, view, "• d: commits on no branch")
+	require.Contains(t, view, "This work will be lost.")
 	deliver(t, h, cmd)
 	require.Equal(t, []string{"/wt/a_1234567890", "/wt/b_1234567890"}, *removed)
 	require.Contains(t, h.errBox.String(), "Removed 2 leftover worktree(s)")
+
+	deliver(t, h, press(h, "y"))
+	require.Equal(t, stateDefault, h.state)
+	require.Equal(t, []string{"/wt/a_1234567890", "/wt/b_1234567890", "/wt/me/c_1234567890", "/wt/d_1234567890"}, *removed)
+}
+
+func TestPruneKeyKeepsUnsavedWhenDeclined(t *testing.T) {
+	removed := fakePrune(t, sampleLeftovers, nil)
+	h := newPruneTestHome(t)
+
+	deliver(t, h, press(h, "P"))
+	deliver(t, h, press(h, "y"))
+	require.Nil(t, press(h, "n"))
+	require.Equal(t, stateDefault, h.state)
+	require.Equal(t, []string{"/wt/a_1234567890", "/wt/b_1234567890"}, *removed)
 }
 
 func TestPruneKeyCancel(t *testing.T) {
@@ -98,7 +124,7 @@ func TestPruneKeyCancel(t *testing.T) {
 
 	deliver(t, h, press(h, "P"))
 	require.Nil(t, press(h, "n"))
-	require.Equal(t, stateDefault, h.state)
+	require.Equal(t, stateDefault, h.state, "declining the first prompt skips the second")
 	require.Empty(t, *removed)
 }
 
@@ -111,14 +137,15 @@ func TestPruneKeyNothingToRemove(t *testing.T) {
 	require.Contains(t, h.errBox.String(), "No leftover worktrees.")
 }
 
-func TestPruneKeyOnlyUnsafeLeftovers(t *testing.T) {
-	removed := fakePrune(t, sampleLeftovers[2:], nil)
+func TestPruneKeyOnlyUnsavedLeftovers(t *testing.T) {
+	removed := fakePrune(t, sampleLeftovers[2:3], nil)
 	h := newPruneTestHome(t)
 
 	deliver(t, h, press(h, "P"))
-	require.Equal(t, stateDefault, h.state, "no confirmation when nothing is safe to remove")
-	require.Contains(t, h.errBox.String(), "cs prune --force")
-	require.Empty(t, *removed)
+	require.Equal(t, stateConfirm, h.state)
+	require.Contains(t, confirmText(h), "Remove 1 leftover worktree(s) with unsaved work?")
+	deliver(t, h, press(h, "y"))
+	require.Equal(t, []string{"/wt/me/c_1234567890"}, *removed)
 }
 
 func TestPruneKeyReportsFailures(t *testing.T) {
