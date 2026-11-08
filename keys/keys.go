@@ -129,7 +129,7 @@ var GlobalkeyBindings = map[KeyName]key.Binding{
 	),
 	KeyPrune: key.NewBinding(
 		key.WithKeys("P"),
-		key.WithHelp("P", "prune worktrees"),
+		key.WithHelp("shift+p", "prune"),
 	),
 
 	// -- Special keybindings --

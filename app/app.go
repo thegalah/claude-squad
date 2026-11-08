@@ -301,7 +301,7 @@ func checkLeftoverWorktreesCmd() tea.Msg {
 
 // leftoverWorktreesNotice is the startup notice shown when leftover worktrees exist.
 func leftoverWorktreesNotice(count int) string {
-	return fmt.Sprintf("%d leftover worktree(s) found. Press P to clean them up.", count)
+	return fmt.Sprintf("%d leftover worktree(s) found. Press shift+p to clean them up.", count)
 }
 
 func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
