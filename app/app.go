@@ -112,6 +112,11 @@ type home struct {
 	textOverlay *overlay.TextOverlay
 	// confirmationOverlay displays confirmation modals
 	confirmationOverlay *overlay.ConfirmationOverlay
+	// afterConfirm, set by confirmActionAsync, is run when the confirmation
+	// overlay is accepted; the tea.Cmd it returns runs in the background.
+	afterConfirm func() tea.Cmd
+	// confirmed is set when the overlay for afterConfirm was accepted.
+	confirmed bool
 }
 
 func newHome(ctx context.Context, program string, autoYes bool) *home {
@@ -296,14 +301,17 @@ func checkLeftoverWorktreesCmd() tea.Msg {
 
 // leftoverWorktreesNotice is the startup notice shown when leftover worktrees exist.
 func leftoverWorktreesNotice(count int) string {
-	return fmt.Sprintf("%d leftover worktree(s) found. Run '%s prune' to clean them up.",
-		count, filepath.Base(os.Args[0]))
+	return fmt.Sprintf("%d leftover worktree(s) found. Press P to clean them up.", count)
 }
 
 func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case hideErrMsg:
 		m.errBox.Clear()
+	case pruneScanMsg:
+		return m, m.handlePruneScan(msg)
+	case pruneDoneMsg:
+		return m, m.handlePruneDone(msg)
 	case exeCheckMsg:
 		return m, m.handleExeCheck(msg)
 	case exeVerifiedMsg:
@@ -716,6 +724,12 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		if shouldClose {
 			m.state = stateDefault
 			m.confirmationOverlay = nil
+			after := m.afterConfirm
+			m.afterConfirm = nil
+			if after != nil && m.confirmed {
+				m.confirmed = false
+				return m, after()
+			}
 			return m, nil
 		}
 		return m, nil
@@ -816,6 +830,8 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 	case keys.KeyShiftDown:
 		m.tabbedWindow.ScrollDown()
 		return m, m.instanceChanged()
+	case keys.KeyPrune:
+		return m, m.startPrune()
 	case keys.KeyTab:
 		m.tabbedWindow.Toggle()
 		m.menu.SetActiveTab(m.tabbedWindow.GetActiveTab())
@@ -1191,6 +1207,19 @@ func (m *home) confirmAction(message string, action tea.Cmd) tea.Cmd {
 	}
 
 	return nil
+}
+
+// confirmActionAsync shows a confirmation modal. If it's accepted, after is
+// called and the tea.Cmd it returns runs in the background, so slow work doesn't
+// block the UI and its result message is delivered.
+func (m *home) confirmActionAsync(message string, after func() tea.Cmd) {
+	m.state = stateConfirm
+	m.confirmationOverlay = overlay.NewConfirmationOverlay(message)
+	m.confirmationOverlay.SetWidth(50)
+	m.confirmed = false
+	m.afterConfirm = after
+	m.confirmationOverlay.OnConfirm = func() { m.confirmed = true }
+	m.confirmationOverlay.OnCancel = func() {}
 }
 
 func (m *home) View() string {

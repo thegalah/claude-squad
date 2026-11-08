@@ -32,6 +32,8 @@ const (
 	// Reorder keybindings
 	KeyMoveUp
 	KeyMoveDown
+
+	KeyPrune // Remove leftover worktrees, like `cs prune`
 )
 
 // GlobalKeyStringsMap is a global, immutable map string to keybinding.
@@ -55,6 +57,7 @@ var GlobalKeyStringsMap = map[string]KeyName{
 	"r":          KeyResume,
 	"p":          KeySubmit,
 	"?":          KeyHelp,
+	"P":          KeyPrune,
 }
 
 // GlobalkeyBindings is a global, immutable map of KeyName tot keybinding.
@@ -123,6 +126,10 @@ var GlobalkeyBindings = map[KeyName]key.Binding{
 	KeyMoveDown: key.NewBinding(
 		key.WithKeys("J"),
 		key.WithHelp("J", "move down"),
+	),
+	KeyPrune: key.NewBinding(
+		key.WithKeys("P"),
+		key.WithHelp("P", "prune worktrees"),
 	),
 
 	// -- Special keybindings --

@@ -56,6 +56,7 @@ func (h helpTypeGeneral) toContent() string {
 		headerStyle.Render("Other:"),
 		keyStyle.Render("tab")+descStyle.Render("       - Switch between preview, diff, and terminal tabs"),
 		keyStyle.Render("shift-↓/↑")+descStyle.Render(" - Scroll in preview/diff/terminal view"),
+		keyStyle.Render("P")+descStyle.Render("         - Prune leftover worktrees no session uses (keeps branches)"),
 		keyStyle.Render("q")+descStyle.Render("         - Quit the application"),
 	)
 	return content
