@@ -273,6 +273,20 @@ func (t *TmuxSession) HasUpdated() (updated bool, hasPrompt bool) {
 	return false, hasPrompt
 }
 
+// detachKey is Ctrl+q (ASCII 17), which detaches from an attached session.
+const detachKey = 17
+
+// splitAtDetachKey returns the input to forward to the attached session and
+// whether it contains the detach key. Ctrl+q can arrive in the same read as
+// other input, e.g. mouse movement reported by the terminal, so the whole read
+// is searched rather than expecting it alone.
+func splitAtDetachKey(input []byte) (forward []byte, detach bool) {
+	if i := bytes.IndexByte(input, detachKey); i >= 0 {
+		return input[:i], true
+	}
+	return input, false
+}
+
 func (t *TmuxSession) Attach() (chan struct{}, error) {
 	t.attachCh = make(chan struct{})
 
@@ -334,15 +348,14 @@ func (t *TmuxSession) Attach() (chan struct{}, error) {
 				continue
 			}
 
-			// Check for Ctrl+q (ASCII 17)
-			if nr == 1 && buf[0] == 17 {
-				// Detach from the session
+			forward, detach := splitAtDetachKey(buf[:nr])
+			if len(forward) > 0 {
+				_, _ = t.ptmx.Write(forward)
+			}
+			if detach {
 				t.Detach()
 				return
 			}
-
-			// Forward other input to tmux
-			_, _ = t.ptmx.Write(buf[:nr])
 		}
 	}()
 

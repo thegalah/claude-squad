@@ -16,18 +16,33 @@ import (
 
 var ansiEscape = regexp.MustCompile(`\x1b\[[0-9;?]*[a-zA-Z]`)
 
-// tabPosition returns the screen cell of name in the tab row of view.
-func tabPosition(t *testing.T, view, name string) (x, y int) {
+// screenLines returns what the terminal shows for h's view: like Bubble Tea,
+// it drops lines from the top when the view is taller than the terminal.
+func screenLines(h *home) []string {
+	lines := strings.Split(ansiEscape.ReplaceAllString(h.View(), ""), "\n")
+	if len(lines) > h.termHeight {
+		lines = lines[len(lines)-h.termHeight:]
+	}
+	return lines
+}
+
+// screenPosition returns the screen cell where text first appears on a line
+// that also contains lineMatch.
+func screenPosition(t *testing.T, h *home, lineMatch, text string) (x, y int) {
 	t.Helper()
-	for i, line := range strings.Split(ansiEscape.ReplaceAllString(view, ""), "\n") {
-		if strings.Contains(line, "Preview") && strings.Contains(line, "Terminal") {
-			idx := strings.Index(line, name)
-			require.GreaterOrEqual(t, idx, 0)
-			return lipgloss.Width(line[:idx]), i
+	for i, line := range screenLines(h) {
+		if strings.Contains(line, lineMatch) && strings.Contains(line, text) {
+			return lipgloss.Width(line[:strings.Index(line, text)]), i
 		}
 	}
-	t.Fatalf("tab row not found in view")
+	t.Fatalf("%q not found on screen", text)
 	return 0, 0
+}
+
+// tabPosition returns the screen cell of name in the tab row.
+func tabPosition(t *testing.T, h *home, name string) (x, y int) {
+	t.Helper()
+	return screenPosition(t, h, "Terminal", name)
 }
 
 func newTabTestHome(t *testing.T) *home {
@@ -46,35 +61,39 @@ func newTabTestHome(t *testing.T) *home {
 	return h
 }
 
+func click(h *home, x, y int) {
+	_, _ = h.Update(tea.MouseMsg{X: x, Y: y, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+}
+
+func hover(h *home, x, y int) {
+	_, _ = h.Update(tea.MouseMsg{X: x, Y: y, Action: tea.MouseActionMotion, Button: tea.MouseButtonNone})
+}
+
 func TestClickingTabSelectsIt(t *testing.T) {
 	h := newTabTestHome(t)
-
-	click := func(x, y int) {
-		_, _ = h.Update(tea.MouseMsg{X: x, Y: y, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
-	}
 
 	for _, tc := range []struct {
 		name string
 		tab  int
 	}{{"Diff", ui.DiffTab}, {"Terminal", ui.TerminalTab}, {"Preview", ui.PreviewTab}} {
-		x, y := tabPosition(t, h.View(), tc.name)
-		click(x, y)
+		x, y := tabPosition(t, h, tc.name)
+		click(h, x, y)
 		require.Equal(t, tc.tab, h.tabbedWindow.GetActiveTab(), "clicking %q", tc.name)
 	}
 
 	// The tab's borders are part of the tab too.
-	x, y := tabPosition(t, h.View(), "Diff")
-	click(x, y-1)
+	x, y := tabPosition(t, h, "Diff")
+	click(h, x, y-1)
 	require.Equal(t, ui.DiffTab, h.tabbedWindow.GetActiveTab())
 
 	// Clicks outside the tab row, or while an overlay is open, do nothing.
-	click(x, y+3)
-	click(2, y)
+	click(h, x, y+3)
+	click(h, 2, y)
 	require.Equal(t, ui.DiffTab, h.tabbedWindow.GetActiveTab())
 
-	x, y = tabPosition(t, h.View(), "Terminal")
+	x, y = tabPosition(t, h, "Terminal")
 	h.state = stateHelp
-	click(x, y)
+	click(h, x, y)
 	require.Equal(t, ui.DiffTab, h.tabbedWindow.GetActiveTab())
 }
 
@@ -85,31 +104,28 @@ func TestHoveringTabHighlightsIt(t *testing.T) {
 	t.Cleanup(func() { lipgloss.SetColorProfile(prev) })
 
 	h := newTabTestHome(t)
-	move := func(x, y int) {
-		_, _ = h.Update(tea.MouseMsg{X: x, Y: y, Action: tea.MouseActionMotion, Button: tea.MouseButtonNone})
-	}
 
 	plain := h.View()
-	diffX, diffY := tabPosition(t, plain, "Diff")
-	previewX, previewY := tabPosition(t, plain, "Preview")
+	diffX, diffY := tabPosition(t, h, "Diff")
+	previewX, previewY := tabPosition(t, h, "Preview")
 
-	move(diffX, diffY)
+	hover(h, diffX, diffY)
 	hovered := h.View()
 	require.NotEqual(t, plain, hovered, "hovering an inactive tab should highlight it")
 	require.Equal(t, ui.PreviewTab, h.tabbedWindow.GetActiveTab(), "hovering must not switch tabs")
 
 	// Hovering the active tab looks the same as not hovering.
-	move(previewX, previewY)
+	hover(h, previewX, previewY)
 	require.Equal(t, plain, h.View())
 
 	// Moving off the tabs clears the highlight.
-	move(diffX, diffY)
-	move(diffX, diffY+5)
+	hover(h, diffX, diffY)
+	hover(h, diffX, diffY+5)
 	require.Equal(t, plain, h.View())
 
 	// No highlight while an overlay is open.
 	h.state = stateHelp
-	move(diffX, diffY)
+	hover(h, diffX, diffY)
 	h.state = stateDefault
 	require.Equal(t, plain, h.View())
 }

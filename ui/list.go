@@ -46,6 +46,14 @@ var selectedDescStyle = lipgloss.NewStyle().
 	Background(lipgloss.Color("#dde4f0")).
 	Foreground(lipgloss.AdaptiveColor{Light: "#1a1a1a", Dark: "#1a1a1a"})
 
+// hoverBackground marks the instance under the mouse pointer: a softer version
+// of the selected background.
+var hoverBackground = lipgloss.AdaptiveColor{Light: "#eef1f7", Dark: "#2b3040"}
+
+var hoverTitleStyle = titleStyle.Background(hoverBackground)
+
+var hoverDescStyle = listDescStyle.Background(hoverBackground)
+
 var mainTitle = lipgloss.NewStyle().
 	Background(lipgloss.Color("62")).
 	Foreground(lipgloss.Color("230"))
@@ -55,8 +63,10 @@ var autoYesStyle = lipgloss.NewStyle().
 	Foreground(lipgloss.Color("#1a1a1a"))
 
 type List struct {
-	items         []*session.Instance
-	selectedIdx   int
+	items       []*session.Instance
+	selectedIdx int
+	// hoverIdx is the item under the mouse pointer, or -1.
+	hoverIdx      int
 	height, width int
 	renderer      *InstanceRenderer
 	autoyes       bool
@@ -75,6 +85,7 @@ func NewList(spinner *spinner.Model, autoYes bool) *List {
 		renderer: &InstanceRenderer{spinner: spinner},
 		repos:    make(map[string]int),
 		autoyes:  autoYes,
+		hoverIdx: -1,
 	}
 }
 
@@ -149,13 +160,22 @@ func (r *InstanceRenderer) setWidth(width int) {
 const branchIcon = "Ꮧ"
 
 func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool, hasMultipleRepos bool) string {
+	return r.render(i, idx, selected, false, hasMultipleRepos)
+}
+
+// render is Render with hovered, which highlights an unselected instance under
+// the mouse pointer.
+func (r *InstanceRenderer) render(i *session.Instance, idx int, selected, hovered bool, hasMultipleRepos bool) string {
 	prefix := fmt.Sprintf(" %d. ", idx)
 	if idx >= 10 {
 		prefix = prefix[:len(prefix)-1]
 	}
 	titleS := selectedTitleStyle
 	descS := selectedDescStyle
-	if !selected {
+	if !selected && hovered {
+		titleS = hoverTitleStyle
+		descS = hoverDescStyle
+	} else if !selected {
 		titleS = titleStyle
 		descS = listDescStyle
 	}
@@ -311,13 +331,60 @@ func (l *List) String() string {
 	b.WriteString("\n")
 
 	// Render the list.
-	for i, item := range l.items {
-		b.WriteString(l.renderer.Render(item, i+1, i == l.selectedIdx, len(l.repos) > 1))
+	for i, item := range l.renderItems() {
+		b.WriteString(item)
 		if i != len(l.items)-1 {
-			b.WriteString("\n\n")
+			b.WriteString(listItemGap)
 		}
 	}
 	return lipgloss.Place(l.width, l.height, lipgloss.Left, lipgloss.Top, b.String())
+}
+
+// listItemsOffset is the number of lines String() renders above the first item:
+// two blank lines, the title and a blank line.
+const listItemsOffset = 4
+
+// listItemGap separates rendered items, leaving listItemGapLines blank lines.
+const (
+	listItemGap      = "\n\n"
+	listItemGapLines = 1
+)
+
+func (l *List) renderItems() []string {
+	rendered := make([]string, len(l.items))
+	for i, item := range l.items {
+		rendered[i] = l.renderer.render(item, i+1, i == l.selectedIdx, i == l.hoverIdx, len(l.repos) > 1)
+	}
+	return rendered
+}
+
+// ItemAt returns the index of the item rendered on line y of String()'s output,
+// or -1 if there is none (including the blank lines between items).
+func (l *List) ItemAt(y int) int {
+	if y < listItemsOffset {
+		return -1
+	}
+	top := listItemsOffset
+	for i, item := range l.renderItems() {
+		height := lipgloss.Height(item)
+		if y < top+height {
+			return i
+		}
+		top += height
+		if y < top+listItemGapLines {
+			return -1 // the gap after item i
+		}
+		top += listItemGapLines
+	}
+	return -1
+}
+
+// SetHoverIdx marks the item under the mouse pointer; -1 means none.
+func (l *List) SetHoverIdx(idx int) {
+	if idx < -1 || idx >= len(l.items) {
+		idx = -1
+	}
+	l.hoverIdx = idx
 }
 
 // Down selects the next item in the list.
