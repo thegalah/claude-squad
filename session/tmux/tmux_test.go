@@ -119,3 +119,24 @@ func TestRestoreAttachesWhenSessionExists(t *testing.T) {
 	require.Len(t, ptyFactory.cmds, 1)
 	require.Contains(t, ptyFactory.cmds[0].String(), "attach-session")
 }
+
+func TestSplitAtDetachKey(t *testing.T) {
+	motion := []byte("\x1b[<35;120;55M")
+	for _, tc := range []struct {
+		name    string
+		input   []byte
+		forward []byte
+		detach  bool
+	}{
+		{"plain input", []byte("ls\r"), []byte("ls\r"), false},
+		{"ctrl+q alone", []byte{17}, []byte{}, true},
+		{"ctrl+q after mouse motion", append(append([]byte{}, motion...), 17), motion, true},
+		{"ctrl+q before mouse motion", append([]byte{17}, motion...), []byte{}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			forward, detach := splitAtDetachKey(tc.input)
+			require.Equal(t, tc.detach, detach)
+			require.Equal(t, string(tc.forward), string(forward))
+		})
+	}
+}

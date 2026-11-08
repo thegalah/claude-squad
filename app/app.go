@@ -74,6 +74,13 @@ type home struct {
 	// exeWatch restarts cs when its executable is replaced. nil disables it.
 	exeWatch *exeWatch
 
+	// termHeight is the terminal height from the last resize.
+	termHeight int
+	// viewOverflow is how many lines the last View() was taller than the
+	// terminal. Bubble Tea drops that many lines from the top, so screen row y
+	// shows line y+viewOverflow of the view.
+	viewOverflow int
+
 	// -- State --
 
 	// state is the current discrete state of the application
@@ -183,38 +190,10 @@ func newHome(ctx context.Context, program string, autoYes bool) *home {
 	return h
 }
 
-// tabAt returns the tab at screen position (x, y), or -1.
-func (m *home) tabAt(x, y int) int {
-	// View() renders the tabbed window to the right of the list, one line down.
-	return m.tabbedWindow.TabAt(x-m.list.Width(), y-1)
-}
-
-// handleTabHover highlights the tab under the mouse pointer at (x, y).
-func (m *home) handleTabHover(x, y int) {
-	tab := -1
-	if m.state == stateDefault {
-		tab = m.tabAt(x, y)
-	}
-	m.tabbedWindow.SetHoverTab(tab)
-}
-
-// handleTabClick switches to the tab clicked at screen position (x, y), if any.
-func (m *home) handleTabClick(x, y int) tea.Cmd {
-	if m.state != stateDefault {
-		return nil
-	}
-	tab := m.tabAt(x, y)
-	if tab < 0 || tab == m.tabbedWindow.GetActiveTab() {
-		return nil
-	}
-	m.tabbedWindow.SetActiveTab(tab)
-	m.menu.SetActiveTab(tab)
-	return m.instanceChanged()
-}
-
 // updateHandleWindowSizeEvent sets the sizes of the components.
 // The components will try to render inside their bounds.
 func (m *home) updateHandleWindowSizeEvent(msg tea.WindowSizeMsg) {
+	m.termHeight = msg.Height
 	// List takes 30% of width, preview takes 70%
 	listWidth := int(float32(msg.Width) * 0.3)
 	tabsWidth := msg.Width - listWidth
@@ -400,11 +379,11 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tickUpdateMetadataCmd(m.snapshotActiveInstances(), m.list.GetSelectedInstance())
 	case tea.MouseMsg:
 		if msg.Action == tea.MouseActionMotion {
-			m.handleTabHover(msg.X, msg.Y)
+			m.handleMouseHover(msg.X, msg.Y)
 			return m, nil
 		}
 		if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
-			return m, m.handleTabClick(msg.X, msg.Y)
+			return m, m.handleMouseClick(msg.X, msg.Y)
 		}
 		// Handle mouse wheel events for scrolling the diff/preview pane
 		if msg.Action == tea.MouseActionPress {
@@ -1233,6 +1212,7 @@ func (m *home) View() string {
 		m.menu.String(),
 		m.errBox.String(),
 	)
+	m.viewOverflow = max(0, lipgloss.Height(mainView)-m.termHeight)
 
 	if m.state == statePrompt {
 		if m.textInputOverlay == nil {
