@@ -69,6 +69,14 @@ type Instance struct {
 	progressMu sync.Mutex
 	progress   StartProgress
 
+	// busy is the slow operation (resume, pause, ...) running on the instance in the
+	// background, if any. Only the UI goroutine reads or writes it.
+	busy BusyOp
+	// worktreeMu serializes the git commands that diffs, Pause and Kill run in the
+	// worktree, so a background diff's `git add -N` can't collide with Pause's commit
+	// (index.lock) or run in a worktree that Pause or Kill is removing.
+	worktreeMu sync.Mutex
+
 	// The below fields are initialized upon calling Start().
 
 	started bool
@@ -312,6 +320,8 @@ func (i *Instance) Start(firstTimeSetup bool) error {
 
 // Kill terminates the instance and cleans up all resources
 func (i *Instance) Kill() error {
+	i.worktreeMu.Lock()
+	defer i.worktreeMu.Unlock()
 	if !i.started {
 		// If instance was never started, just return success
 		return nil
@@ -358,6 +368,16 @@ func (i *Instance) Preview() (string, error) {
 		return "", nil
 	}
 	return i.tmuxSession.CapturePaneContent()
+}
+
+// PaneCapturer returns a function that captures the instance's tmux pane, or nil if the
+// instance has no running session. Call it on the UI goroutine; the returned function
+// doesn't read the instance, so it can run in the background.
+func (i *Instance) PaneCapturer() func() (string, error) {
+	if !i.started || i.Status == Paused || i.tmuxSession == nil {
+		return nil
+	}
+	return i.tmuxSession.CapturePaneContent
 }
 
 func (i *Instance) HasUpdated() (updated bool, hasPrompt bool) {
@@ -447,6 +467,8 @@ func (i *Instance) TmuxAlive() bool {
 
 // Pause stops the tmux session and removes the worktree, preserving the branch
 func (i *Instance) Pause() error {
+	i.worktreeMu.Lock()
+	defer i.worktreeMu.Unlock()
 	if !i.started {
 		return fmt.Errorf("cannot pause instance that has not been started")
 	}
@@ -627,6 +649,8 @@ func (i *Instance) UpdateDiffStats() error {
 // ComputeDiff runs the expensive git diff I/O and returns the result without
 // mutating instance state. Safe to call from a background goroutine.
 func (i *Instance) ComputeDiff() *git.DiffStats {
+	i.worktreeMu.Lock()
+	defer i.worktreeMu.Unlock()
 	if !i.started || i.Status == Paused {
 		return nil
 	}
@@ -638,6 +662,8 @@ func (i *Instance) ComputeDiff() *git.DiffStats {
 // background goroutine. Use this for instances whose full diff content is not
 // currently needed so we avoid keeping large diffs in memory.
 func (i *Instance) ComputeDiffNumstat() *git.DiffStats {
+	i.worktreeMu.Lock()
+	defer i.worktreeMu.Unlock()
 	if !i.started || i.Status == Paused {
 		return nil
 	}
@@ -687,6 +713,11 @@ func (i *Instance) PreviewFullHistory() (string, error) {
 // SetTmuxSession sets the tmux session for testing purposes
 func (i *Instance) SetTmuxSession(session *tmux.TmuxSession) {
 	i.tmuxSession = session
+}
+
+// SetGitWorktree sets the git worktree for testing purposes
+func (i *Instance) SetGitWorktree(worktree *git.GitWorktree) {
+	i.gitWorktree = worktree
 }
 
 // SendKeys sends keys to the tmux session

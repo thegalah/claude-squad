@@ -78,6 +78,10 @@ func (t *TerminalPane) UpdateContent(instance *session.Instance) error {
 		t.setFallbackState("Select an instance to open a terminal")
 		return nil
 	}
+	if instance.Busy().StopsSession() {
+		t.setFallbackState(busyMessage(instance.Busy()))
+		return nil
+	}
 	if instance.Status == session.Paused {
 		t.setFallbackState("Session is paused. Resume to use terminal.")
 		return nil
@@ -111,6 +115,36 @@ func (t *TerminalPane) UpdateContent(instance *session.Instance) error {
 	t.fallback = false
 	t.content = content
 	return nil
+}
+
+// LiveCapturer returns a function that captures the terminal session the pane is showing
+// for instance, for running in the background; pass its result to SetLiveContent. It
+// returns nil when the pane isn't showing a live session for instance, in which case
+// UpdateContent works out what to show (and starts the session if needed).
+func (t *TerminalPane) LiveCapturer(instance *session.Instance) func() (string, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if instance == nil || !instance.Started() || instance.Status == session.Paused ||
+		instance.Busy().StopsSession() || t.isScrolling || t.currentTitle != instance.Title {
+		return nil
+	}
+	s, ok := t.sessions[instance.Title]
+	if !ok || s.tmuxSession == nil {
+		return nil
+	}
+	return s.tmuxSession.CapturePaneContent
+}
+
+// SetLiveContent shows content captured by a LiveCapturer for instance, unless the pane
+// has since moved on to another instance or into scroll mode.
+func (t *TerminalPane) SetLiveContent(instance *session.Instance, content string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if instance == nil || t.currentTitle != instance.Title || t.isScrolling {
+		return
+	}
+	t.fallback = false
+	t.content = content
 }
 
 // ensureSession creates or reuses a cached terminal tmux session for the given instance.

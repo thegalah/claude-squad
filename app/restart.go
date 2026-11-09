@@ -2,7 +2,6 @@ package app
 
 import (
 	"claude-squad/log"
-	"claude-squad/session"
 	"context"
 	"fmt"
 	"os"
@@ -163,13 +162,14 @@ func (m *home) handleExeVerified(msg exeVerifiedMsg) tea.Cmd {
 	return nil
 }
 
-// canRestartNow reports whether restarting would interrupt nothing the user is doing.
+// canRestartNow reports whether restarting would interrupt nothing the user is doing, such
+// as an instance starting or a background resume, pause, kill or push.
 func (m *home) canRestartNow() bool {
 	if m.state != stateDefault {
 		return false
 	}
 	for _, inst := range m.list.GetInstances() {
-		if inst.Status == session.Loading {
+		if busyOrLoading(inst) {
 			return false
 		}
 	}

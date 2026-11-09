@@ -184,6 +184,38 @@ func (w *TabbedWindow) UpdateTerminal(instance *session.Instance) error {
 // ExitScrollModes leaves scroll mode in the preview and terminal panes, e.g.
 // when another instance is selected, so they show that instance's live output
 // instead of the previous instance's scrollback.
+// LiveCapturer returns a function that captures the active tab's live tmux content for
+// instance, for running in the background; pass its result to SetLiveContent. It returns
+// nil when the active tab has nothing live to capture, in which case UpdatePreview,
+// UpdateTerminal and UpdateDiff refresh it without slow work.
+func (w *TabbedWindow) LiveCapturer(instance *session.Instance) func() (string, error) {
+	switch w.activeTab {
+	case PreviewTab:
+		if w.preview.WantsLiveContent(instance) {
+			return instance.PaneCapturer()
+		}
+	case TerminalTab:
+		return w.terminal.LiveCapturer(instance)
+	}
+	return nil
+}
+
+// SetLiveContent shows content captured by a LiveCapturer for instance while tab was
+// active. It's dropped if the tab, or what the tab shows, has changed since.
+func (w *TabbedWindow) SetLiveContent(tab int, instance *session.Instance, content string) {
+	if tab != w.activeTab {
+		return
+	}
+	switch tab {
+	case PreviewTab:
+		if w.preview.WantsLiveContent(instance) {
+			w.preview.SetLiveContent(content)
+		}
+	case TerminalTab:
+		w.terminal.SetLiveContent(instance, content)
+	}
+}
+
 func (w *TabbedWindow) ExitScrollModes() {
 	w.preview.ExitScrollMode()
 	w.terminal.ResetToNormalMode()

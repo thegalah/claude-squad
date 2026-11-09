@@ -67,6 +67,9 @@ func (p *PreviewPane) UpdateContent(instance *session.Instance) error {
 	case instance.Status == session.Loading:
 		p.previewState = previewState{fallback: true, text: p.renderStartProgress(instance)}
 		return nil
+	case instance.Busy().StopsSession():
+		p.setFallbackState(busyMessage(instance.Busy()))
+		return nil
 	case instance.Status == session.Paused:
 		p.setFallbackState(lipgloss.JoinVertical(lipgloss.Center,
 			"Session is paused. Press 'r' to resume.",
@@ -113,15 +116,37 @@ func (p *PreviewPane) UpdateContent(instance *session.Instance) error {
 		if len(content) == 0 && !instance.Started() {
 			p.setFallbackState("Please enter a name for the instance.")
 		} else {
-			// Update the preview state with the current content
-			p.previewState = previewState{
-				fallback: false,
-				text:     content,
-			}
+			p.SetLiveContent(content)
 		}
 	}
 
 	return nil
+}
+
+// WantsLiveContent reports whether the pane shows instance's live tmux pane, so its
+// content can be captured in the background (instance.PaneCapturer) and passed to
+// SetLiveContent instead of calling UpdateContent.
+func (p *PreviewPane) WantsLiveContent(instance *session.Instance) bool {
+	return instance != nil && instance.Started() && !p.isScrolling &&
+		instance.Status != session.Loading && instance.Status != session.Paused &&
+		!instance.Busy().StopsSession()
+}
+
+// SetLiveContent shows captured tmux pane content.
+func (p *PreviewPane) SetLiveContent(content string) {
+	p.previewState = previewState{
+		fallback: false,
+		text:     content,
+	}
+}
+
+// busyMessage is shown in place of a session's pane while op runs, e.g. "Pausing session…".
+func busyMessage(op session.BusyOp) string {
+	label := op.Label()
+	if label == "" {
+		return ""
+	}
+	return strings.ToUpper(label[:1]) + label[1:] + " session…"
 }
 
 // Returns the preview pane content as a string.
