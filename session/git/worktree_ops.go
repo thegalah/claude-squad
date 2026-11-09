@@ -70,7 +70,18 @@ func (g *GitWorktree) setupFromExistingBranch() error {
 // recordBaseCommit stores the commit the session starts from. Diffs are computed
 // against it, so leaving it unset makes every git diff invocation fail with an
 // ambiguous argument error once the session is running.
+//
+// When the worktree is being recreated for a session that already has a base commit
+// (Resume after Pause), that base is kept as long as it's still in the branch's history.
+// Resetting it to the branch head would hide the session's work, including the commit
+// Pause made, from the diff.
 func (g *GitWorktree) recordBaseCommit() error {
+	if g.baseCommitSHA != "" {
+		if _, err := g.runGitCommand(g.worktreePath, "merge-base", "--is-ancestor", g.baseCommitSHA, "HEAD"); err == nil {
+			return nil
+		}
+		// The branch was rewritten (or the commit is gone): fall back to its head.
+	}
 	output, err := g.runGitCommand(g.worktreePath, "rev-parse", "HEAD")
 	if err != nil {
 		return fmt.Errorf("failed to get base commit hash for branch %s: %w", g.branchName, err)

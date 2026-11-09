@@ -110,6 +110,72 @@ func TestSetupFromExistingBranch_RecordsBaseCommit(t *testing.T) {
 	}
 }
 
+// Resume recreates a paused session's worktree from its branch, which by then holds
+// the commit Pause made. The diff must still be measured from where the session
+// started, or it shows as empty.
+func TestSetupFromExistingBranch_KeepsBaseCommitOnResume(t *testing.T) {
+	repoPath, worktreePath := newBaseCommitTestRepo(t)
+	base := strings.TrimSpace(mustRunGit(t, repoPath, "rev-parse", "HEAD"))
+	mustRunGit(t, repoPath, "branch", "feature/test")
+	mustRunGit(t, repoPath, "commit", "--allow-empty", "-m", "paused work", "--quiet")
+	mustRunGit(t, repoPath, "branch", "-f", "feature/test", "HEAD")
+	mustRunGit(t, repoPath, "reset", "--hard", "--quiet", base)
+
+	g := &GitWorktree{
+		repoPath:         repoPath,
+		worktreePath:     worktreePath,
+		branchName:       "feature/test",
+		baseCommitSHA:    base,
+		isExistingBranch: true,
+	}
+	if err := g.Setup(); err != nil {
+		t.Fatalf("Setup() error = %v", err)
+	}
+	if got := g.GetBaseCommitSHA(); got != base {
+		t.Fatalf("GetBaseCommitSHA() = %q, want the original base %q", got, base)
+	}
+}
+
+// If the branch was rewritten so the old base is no longer in its history, diffing
+// against it would include unrelated changes; start from the branch head instead.
+func TestSetupFromExistingBranch_ResetsBaseCommitNotOnBranch(t *testing.T) {
+	repoPath, worktreePath := newBaseCommitTestRepo(t)
+	mustRunGit(t, repoPath, "checkout", "--quiet", "-b", "other")
+	mustRunGit(t, repoPath, "commit", "--allow-empty", "-m", "elsewhere", "--quiet")
+	stray := strings.TrimSpace(mustRunGit(t, repoPath, "rev-parse", "HEAD"))
+	mustRunGit(t, repoPath, "checkout", "--quiet", "-")
+	mustRunGit(t, repoPath, "branch", "feature/test")
+
+	g := &GitWorktree{
+		repoPath:         repoPath,
+		worktreePath:     worktreePath,
+		branchName:       "feature/test",
+		baseCommitSHA:    stray,
+		isExistingBranch: true,
+	}
+	if err := g.Setup(); err != nil {
+		t.Fatalf("Setup() error = %v", err)
+	}
+	want := strings.TrimSpace(mustRunGit(t, repoPath, "rev-parse", "feature/test"))
+	if got := g.GetBaseCommitSHA(); got != want {
+		t.Fatalf("GetBaseCommitSHA() = %q, want branch head %q", got, want)
+	}
+}
+
+// newBaseCommitTestRepo creates a repo with one commit under a temporary HOME and
+// returns it and a worktree path for it.
+func newBaseCommitTestRepo(t *testing.T) (repoPath, worktreePath string) {
+	t.Helper()
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	repoPath = filepath.Join(t.TempDir(), "repo")
+	mustRunGit(t, "", "init", "--quiet", repoPath)
+	mustRunGit(t, repoPath, "config", "user.name", "Test User")
+	mustRunGit(t, repoPath, "config", "user.email", "test@example.com")
+	mustRunGit(t, repoPath, "commit", "--allow-empty", "-m", "initial", "--quiet")
+	return repoPath, filepath.Join(tempHome, ".claude-squad", "worktrees", "feature-test")
+}
+
 func mustRunGit(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 
