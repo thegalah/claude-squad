@@ -118,7 +118,7 @@ func (i *Instance) ToInstanceData() InstanceData {
 		data.DiffStats = DiffStatsData{
 			Added:   i.diffStats.Added,
 			Removed: i.diffStats.Removed,
-			Content: i.diffStats.Content,
+			Files:   i.diffStats.Files,
 		}
 	}
 
@@ -148,7 +148,7 @@ func FromInstanceData(data InstanceData) (*Instance, error) {
 		diffStats: &git.DiffStats{
 			Added:   data.DiffStats.Added,
 			Removed: data.DiffStats.Removed,
-			Content: data.DiffStats.Content,
+			Files:   data.DiffStats.Files,
 		},
 	}
 
@@ -646,8 +646,8 @@ func (i *Instance) UpdateDiffStats() error {
 	return nil
 }
 
-// ComputeDiff runs the expensive git diff I/O and returns the result without
-// mutating instance state. Safe to call from a background goroutine.
+// ComputeDiff runs git to find the instance's changed files and returns the result
+// without mutating instance state. Safe to call from a background goroutine.
 func (i *Instance) ComputeDiff() *git.DiffStats {
 	i.worktreeMu.Lock()
 	defer i.worktreeMu.Unlock()
@@ -655,19 +655,6 @@ func (i *Instance) ComputeDiff() *git.DiffStats {
 		return nil
 	}
 	return i.gitWorktree.Diff()
-}
-
-// ComputeDiffNumstat runs a lightweight git diff --numstat and returns only the
-// added/removed line counts (Content is left empty). Safe to call from a
-// background goroutine. Use this for instances whose full diff content is not
-// currently needed so we avoid keeping large diffs in memory.
-func (i *Instance) ComputeDiffNumstat() *git.DiffStats {
-	i.worktreeMu.Lock()
-	defer i.worktreeMu.Unlock()
-	if !i.started || i.Status == Paused {
-		return nil
-	}
-	return i.gitWorktree.DiffNumstat()
 }
 
 // SetDiffStats sets the diff statistics on the instance. Should be called from

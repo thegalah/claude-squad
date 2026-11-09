@@ -4,7 +4,6 @@ import (
 	"claude-squad/log"
 	"claude-squad/session"
 	"claude-squad/session/git"
-	"claude-squad/ui"
 	"strings"
 	"time"
 
@@ -49,12 +48,12 @@ func (m *home) refreshPreview() tea.Cmd {
 		// Nothing live to capture: the active tab updates without touching tmux.
 		return tea.Batch(m.instanceChanged(), previewTickCmd())
 	}
-	syncCmd := m.syncSelection()
+	m.syncSelection()
 	tab := m.tabbedWindow.GetActiveTab()
-	return tea.Batch(syncCmd, func() tea.Msg {
+	return func() tea.Msg {
 		content, err := capture()
 		return previewCapturedMsg{instance: selected, tab: tab, content: content, err: err}
-	})
+	}
 }
 
 // handlePreviewCaptured shows a background capture, unless the selection or tab changed
@@ -72,65 +71,18 @@ func (m *home) handlePreviewCaptured(msg previewCapturedMsg) tea.Cmd {
 	return previewTickCmd()
 }
 
-// syncSelection updates everything that follows the selected instance and active tab
-// without slow work. When either changed and the Diff tab is showing, it returns a
-// command that computes the selected instance's full diff right away, rather than leaving
-// the pane empty until the next metadata pass.
-func (m *home) syncSelection() tea.Cmd {
+// syncSelection updates everything that follows the selected instance without slow work.
+func (m *home) syncSelection() {
 	selected := m.list.GetSelectedInstance()
-	tab := m.tabbedWindow.GetActiveTab()
-	var cmd tea.Cmd
-	if selected != m.lastSelected || tab != m.lastTab {
-		if selected != m.lastSelected {
-			// Scroll mode freezes a pane on the instance it was entered for.
-			m.tabbedWindow.ExitScrollModes()
-		}
-		if tab == ui.DiffTab {
-			cmd = computeDiffCmd(selected)
-		}
+	if selected != m.lastSelected {
+		// Scroll mode freezes a pane on the instance it was entered for.
+		m.tabbedWindow.ExitScrollModes()
 		m.lastSelected = selected
-		m.lastTab = tab
 	}
 
 	m.tabbedWindow.UpdateDiff(selected)
 	m.tabbedWindow.SetInstance(selected)
 	m.menu.SetInstance(selected)
-	return cmd
-}
-
-// diffComputedMsg carries a full diff computed in the background for instance.
-type diffComputedMsg struct {
-	instance *session.Instance
-	stats    *git.DiffStats
-}
-
-// computeDiffCmd computes inst's full diff in the background, or returns nil if inst has
-// no worktree to diff right now.
-func computeDiffCmd(inst *session.Instance) tea.Cmd {
-	if !hasLiveSession(inst) {
-		return nil
-	}
-	return func() tea.Msg {
-		return diffComputedMsg{instance: inst, stats: inst.ComputeDiff()}
-	}
-}
-
-func (m *home) handleDiffComputed(msg diffComputedMsg) tea.Cmd {
-	if !hasLiveSession(msg.instance) {
-		return nil
-	}
-	setDiffStats(msg.instance, msg.stats)
-	if msg.instance == m.list.GetSelectedInstance() {
-		m.tabbedWindow.UpdateDiff(msg.instance)
-	}
-	return nil
-}
-
-// hasLiveSession reports whether inst has a running session and worktree that nothing
-// is stopping or starting.
-func hasLiveSession(inst *session.Instance) bool {
-	return inst != nil && inst.Started() && !inst.Paused() &&
-		inst.Status != session.Loading && !inst.Busy().StopsSession()
 }
 
 // setDiffStats stores stats computed in the background on inst.
@@ -150,7 +102,6 @@ func (m *home) applyMetadata(results []instanceMetaResult, now time.Time) {
 	if m.lastOutputChange == nil {
 		m.lastOutputChange = make(map[*session.Instance]time.Time)
 	}
-	selected := m.list.GetSelectedInstance()
 	listed := make(map[*session.Instance]bool)
 	for _, inst := range m.list.GetInstances() {
 		listed[inst] = true
@@ -168,15 +119,6 @@ func (m *home) applyMetadata(results []instanceMetaResult, now time.Time) {
 			inst.TapEnter()
 		} else if now.Sub(m.lastOutputChange[inst]) >= readyAfter {
 			inst.SetStatus(session.Ready)
-		}
-
-		// The pass only has counts for instances that weren't selected when it began. If
-		// one is selected now, it already has (or is getting) its full diff; keep that
-		// rather than blanking the Diff tab until the next pass.
-		if !r.full && inst == selected {
-			if cur := inst.GetDiffStats(); cur != nil && cur.Content != "" {
-				continue
-			}
 		}
 		setDiffStats(inst, r.diffStats)
 	}

@@ -5,7 +5,6 @@ import (
 	"claude-squad/session"
 	"claude-squad/session/git"
 	"claude-squad/session/tmux"
-	"claude-squad/ui"
 	"encoding/json"
 	"errors"
 	"os"
@@ -184,36 +183,6 @@ func TestStalePreviewCaptureIsDropped(t *testing.T) {
 	h.instanceChanged()
 	h.Update(captured)
 	require.NotContains(t, h.View(), "hello from alpha", "alpha's capture landed on bravo's preview")
-}
-
-func TestSwitchingToDiffTabComputesDiffRightAway(t *testing.T) {
-	alpha, _ := startedInstance(t, "alpha", true)
-	h := newResponsiveTestHome(t, alpha)
-
-	h.tabbedWindow.SetActiveTab(ui.DiffTab)
-	cmd := h.instanceChanged()
-	require.NotNil(t, cmd, "expected a background diff for the newly shown Diff tab")
-	findMsg[diffComputedMsg](t, runCmd(cmd))
-
-	require.Nil(t, h.instanceChanged(), "no new diff while nothing changed")
-}
-
-func TestNumstatPassKeepsSelectedFullDiff(t *testing.T) {
-	alpha, _ := startedInstance(t, "alpha", true)
-	bravo, _ := startedInstance(t, "bravo", true)
-	h := newResponsiveTestHome(t, alpha, bravo)
-	full := &git.DiffStats{Content: "+line\n", Added: 1}
-	alpha.SetDiffStats(full)
-	bravo.SetDiffStats(&git.DiffStats{Content: "+old\n", Added: 1})
-
-	// A pass that began while bravo was selected: alpha only got counts.
-	h.applyMetadata([]instanceMetaResult{
-		{instance: alpha, diffStats: &git.DiffStats{Added: 2}},
-		{instance: bravo, diffStats: &git.DiffStats{Added: 3}},
-	}, time.Now())
-
-	require.Same(t, full, alpha.GetDiffStats(), "the selected instance's full diff was blanked")
-	require.Equal(t, 3, bravo.GetDiffStats().Added)
 }
 
 func TestStatusStaysRunningUntilOutputSettles(t *testing.T) {
