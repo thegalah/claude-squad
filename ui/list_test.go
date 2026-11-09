@@ -92,3 +92,37 @@ func TestTitleIncludesRepoName(t *testing.T) {
 	// Too narrow for any of the name: fall back to the plain title.
 	require.Equal(t, " Instances ", l.title(14))
 }
+
+func TestRemoveKeepsSelectionOnSameInstance(t *testing.T) {
+	titles := func(l *List) []string {
+		var out []string
+		for _, inst := range l.items {
+			out = append(out, inst.Title)
+		}
+		return out
+	}
+	for _, tc := range []struct {
+		name             string
+		selected, remove int
+		wantSelected     string
+	}{
+		{"remove before selection", 2, 0, "c"},
+		{"remove after selection", 0, 2, "a"},
+		{"remove selected middle", 1, 1, "c"},
+		{"remove selected last", 2, 2, "b"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			l := newTestList("a", "b", "c")
+			l.SetSelectedInstance(tc.selected)
+			removed := l.items[tc.remove].Title
+			l.Remove(l.items[tc.remove])
+			require.NotContains(t, titles(l), removed)
+			require.Len(t, l.items, 2)
+			require.Equal(t, tc.wantSelected, l.GetSelectedInstance().Title)
+		})
+	}
+
+	l := newTestList("a")
+	l.Remove(l.items[0])
+	require.Nil(t, l.GetSelectedInstance())
+}

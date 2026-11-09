@@ -169,15 +169,24 @@ func (m *home) handleHelpState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	shouldClose := m.textOverlay.HandleKeyPress(msg)
 	if shouldClose {
 		m.state = stateDefault
-		return m, tea.Sequence(
+		return m, tea.Batch(m.takeAfterHelp(), tea.Sequence(
 			tea.WindowSize(),
 			m.setWindowTitle(), // dismissing may have run an attach that changed the title
 			func() tea.Msg {
 				m.menu.SetState(ui.StateDefault)
 				return nil
 			},
-		)
+		))
 	}
 
 	return m, nil
+}
+
+// takeAfterHelp returns and clears the command a help screen's onDismiss callback left in
+// m.afterHelp. The callback runs either straight away (help already seen) or when the
+// help screen is dismissed, so both the key handler and handleHelpState return this.
+func (m *home) takeAfterHelp() tea.Cmd {
+	cmd := m.afterHelp
+	m.afterHelp = nil
+	return cmd
 }

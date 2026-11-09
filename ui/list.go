@@ -182,14 +182,18 @@ func (r *InstanceRenderer) render(i *session.Instance, idx int, selected, hovere
 
 	// add spinner next to title if it's running
 	var join string
-	switch i.Status {
-	case session.Running, session.Loading:
+	switch {
+	case i.Busy() != session.NotBusy:
 		join = fmt.Sprintf("%s ", r.spinner.View())
-	case session.Ready:
-		join = readyStyle.Render(readyIcon)
-	case session.Paused:
-		join = pausedStyle.Render(pausedIcon)
 	default:
+		switch i.Status {
+		case session.Running, session.Loading:
+			join = fmt.Sprintf("%s ", r.spinner.View())
+		case session.Ready:
+			join = readyStyle.Render(readyIcon)
+		case session.Paused:
+			join = pausedStyle.Render(pausedIcon)
+		}
 	}
 
 	// Cut the title if it's too long
@@ -272,6 +276,8 @@ func (r *InstanceRenderer) render(i *session.Instance, idx int, selected, hovere
 		// The branch isn't interesting yet: say what setup is doing instead, so a slow start
 		// (e.g. a long setup script) doesn't look like a hang.
 		branchLine = loadingLine(i, len(prefix), r.width)
+	} else if op := i.Busy(); op != session.NotBusy {
+		branchLine = statusLine(op.Label()+"…", len(prefix), r.width)
 	}
 
 	// join title and subtitle
@@ -292,6 +298,12 @@ func loadingLine(i *session.Instance, indent, width int) string {
 	if !prog.StartedAt.IsZero() {
 		text += " " + session.FormatElapsed(time.Since(prog.StartedAt))
 	}
+	return statusLine(text, indent, width)
+}
+
+// statusLine renders text as an instance's second line in place of its branch, indented
+// by indent and padded or truncated to width.
+func statusLine(text string, indent, width int) string {
 	line := strings.Repeat(" ", indent) + " " + text
 	if width <= 0 {
 		return line
@@ -410,22 +422,36 @@ func (l *List) Kill() {
 	if err := targetInstance.Kill(); err != nil {
 		log.ErrorLog.Printf("could not kill instance: %v", err)
 	}
+	l.Remove(targetInstance)
+}
 
-	// If you delete the last one in the list, select the previous one.
-	if l.selectedIdx == len(l.items)-1 {
-		defer l.Up()
+// Remove takes target out of the list without killing it. The selection stays on the same
+// instance, or moves to the previous one if target was selected and last.
+func (l *List) Remove(target *session.Instance) {
+	idx := -1
+	for i, inst := range l.items {
+		if inst == target {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return
 	}
 
-	// Unregister the reponame.
-	repoName, err := targetInstance.RepoName()
-	if err != nil {
-		log.ErrorLog.Printf("could not get repo name: %v", err)
-	} else {
-		l.rmRepo(repoName)
+	// Unregister the reponame. Only started instances registered one (see AddInstance).
+	if target.Started() {
+		if repoName, err := target.RepoName(); err != nil {
+			log.ErrorLog.Printf("could not get repo name: %v", err)
+		} else {
+			l.rmRepo(repoName)
+		}
 	}
 
-	// Since there's items after this, the selectedIdx can stay the same.
-	l.items = append(l.items[:l.selectedIdx], l.items[l.selectedIdx+1:]...)
+	l.items = append(l.items[:idx], l.items[idx+1:]...)
+	if (idx < l.selectedIdx || l.selectedIdx >= len(l.items)) && l.selectedIdx > 0 {
+		l.selectedIdx--
+	}
 }
 
 func (l *List) Attach() (chan struct{}, error) {

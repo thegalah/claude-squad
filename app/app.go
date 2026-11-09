@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
@@ -74,9 +73,16 @@ type home struct {
 	// exeWatch restarts cs when its executable is replaced. nil disables it.
 	exeWatch *exeWatch
 
-	// lastSelected is the instance selected at the last instanceChanged, used to
-	// notice when the selection changes.
+	// lastSelected and lastTab are the instance selected and the tab active at the last
+	// syncSelection, used to notice when either changes.
 	lastSelected *session.Instance
+	lastTab      int
+	// lastOutputChange is when each instance's pane content last changed, used to decide
+	// when it's Ready.
+	lastOutputChange map[*session.Instance]time.Time
+	// afterHelp is a command set by a help screen's onDismiss callback, returned once the
+	// key that ran the callback has been handled (see takeAfterHelp).
+	afterHelp tea.Cmd
 
 	// termHeight is the terminal height from the last resize.
 	termHeight int
@@ -230,10 +236,7 @@ func (m *home) Init() tea.Cmd {
 	cmds := []tea.Cmd{
 		m.setWindowTitle(),
 		m.spinner.Tick,
-		func() tea.Msg {
-			time.Sleep(100 * time.Millisecond)
-			return previewTickMsg{}
-		},
+		previewTickCmd(),
 		tickUpdateMetadataCmd(m.snapshotActiveInstances(), m.list.GetSelectedInstance()),
 		checkLeftoverWorktreesCmd,
 	}
@@ -321,14 +324,15 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return hideErrMsg{}
 		}
 	case previewTickMsg:
-		cmd := m.instanceChanged()
-		return m, tea.Batch(
-			cmd,
-			func() tea.Msg {
-				time.Sleep(100 * time.Millisecond)
-				return previewTickMsg{}
-			},
-		)
+		return m, m.refreshPreview()
+	case previewCapturedMsg:
+		return m, m.handlePreviewCaptured(msg)
+	case diffComputedMsg:
+		return m, m.handleDiffComputed(msg)
+	case busyDoneMsg:
+		return m, m.handleBusyDone(msg)
+	case killDoneMsg:
+		return m, m.handleKillDone(msg)
 	case keyupMsg:
 		m.menu.ClearKeydown()
 		return m, nil
@@ -359,27 +363,7 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		return m, tea.Batch(tea.WindowSize(), m.instanceChanged())
 	case metadataUpdateDoneMsg:
-		for _, r := range msg.results {
-			// Skip instances that were paused while metadata was being computed
-			if r.instance.Status == session.Paused {
-				continue
-			}
-			if r.updated {
-				r.instance.SetStatus(session.Running)
-			} else if r.hasPrompt {
-				r.instance.TapEnter()
-			} else {
-				r.instance.SetStatus(session.Ready)
-			}
-			if r.diffStats != nil && r.diffStats.Error != nil {
-				if !strings.Contains(r.diffStats.Error.Error(), "base commit SHA not set") {
-					log.WarningLog.Printf("could not update diff stats: %v", r.diffStats.Error)
-				}
-				r.instance.SetDiffStats(nil)
-			} else {
-				r.instance.SetDiffStats(r.diffStats)
-			}
-		}
+		m.applyMetadata(msg.results, time.Now())
 		return m, tickUpdateMetadataCmd(m.snapshotActiveInstances(), m.list.GetSelectedInstance())
 	case tea.MouseMsg:
 		if msg.Action == tea.MouseActionMotion {
@@ -739,7 +723,14 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		}
 	}
 
-	// Handle quit commands first
+	// Handle quit commands first. q waits for background operations, which would be cut
+	// off halfway; ctrl+c quits regardless.
+	if msg.String() == "q" {
+		if inst := m.busyInstance(); inst != nil {
+			return m, m.handleError(fmt.Errorf("still %s '%s': wait for it to finish, or press ctrl+c to quit anyway",
+				inst.Busy().Label(), inst.Title))
+		}
+	}
 	if msg.String() == "ctrl+c" || msg.String() == "q" {
 		return m.handleQuit()
 	}
@@ -821,81 +812,33 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		return m, m.instanceChanged()
 	case keys.KeyKill:
 		selected := m.list.GetSelectedInstance()
-		if selected == nil || selected.Status == session.Loading {
+		if selected == nil || busyOrLoading(selected) {
 			return m, nil
 		}
-
-		// Create the kill action as a tea.Cmd
-		killAction := func() tea.Msg {
-			// Get worktree and check if branch is checked out
-			worktree, err := selected.GetGitWorktree()
-			if err != nil {
-				return err
-			}
-
-			checkedOut, err := worktree.IsBranchCheckedOut()
-			if err != nil {
-				return err
-			}
-
-			if checkedOut {
-				return fmt.Errorf("instance %s is currently checked out", selected.Title)
-			}
-
-			// Clean up terminal session for this instance
-			m.tabbedWindow.CleanupTerminalForInstance(selected.Title)
-
-			// Delete from storage first
-			if err := m.storage.DeleteInstance(selected.Title); err != nil {
-				return err
-			}
-
-			// Then kill the instance
-			m.list.Kill()
-			return instanceChangedMsg{}
-		}
-
-		// Show confirmation modal
-		message := fmt.Sprintf("[!] Kill session '%s'?", selected.Title)
-		return m, m.confirmAction(message, killAction)
+		m.confirmActionAsync(fmt.Sprintf("[!] Kill session '%s'?", selected.Title), func() tea.Cmd {
+			return m.startKill(selected)
+		})
+		return m, nil
 	case keys.KeySubmit:
 		selected := m.list.GetSelectedInstance()
-		if selected == nil || selected.Status == session.Loading {
+		if selected == nil || busyOrLoading(selected) {
 			return m, nil
 		}
-
-		// Create the push action as a tea.Cmd
-		pushAction := func() tea.Msg {
-			// Default commit message with timestamp
-			commitMsg := fmt.Sprintf("[claudesquad] update from '%s' on %s", selected.Title, time.Now().Format(time.RFC822))
-			worktree, err := selected.GetGitWorktree()
-			if err != nil {
-				return err
-			}
-			if err = worktree.PushChanges(commitMsg, true); err != nil {
-				return err
-			}
-			return nil
-		}
-
-		// Show confirmation modal
-		message := fmt.Sprintf("[!] Push changes from session '%s'?", selected.Title)
-		return m, m.confirmAction(message, pushAction)
+		m.confirmActionAsync(fmt.Sprintf("[!] Push changes from session '%s'?", selected.Title), func() tea.Cmd {
+			return m.startPush(selected)
+		})
+		return m, nil
 	case keys.KeyCheckout:
 		selected := m.list.GetSelectedInstance()
-		if selected == nil || selected.Status == session.Loading {
+		if selected == nil || busyOrLoading(selected) {
 			return m, nil
 		}
 
 		// Show help screen before pausing
 		m.showHelpScreen(helpTypeInstanceCheckout{}, func() {
-			if err := selected.Pause(); err != nil {
-				m.handleError(err)
-			}
-			m.tabbedWindow.CleanupTerminalForInstance(selected.Title)
-			m.instanceChanged()
+			m.afterHelp = m.startPause(selected)
 		})
-		return m, nil
+		return m, m.takeAfterHelp()
 	case keys.KeyMoveUp:
 		if m.list.MoveUp() {
 			if err := m.storage.SaveInstances(m.list.GetInstances()); err != nil {
@@ -914,19 +857,16 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		return m, nil
 	case keys.KeyResume:
 		selected := m.list.GetSelectedInstance()
-		if selected == nil || selected.Status == session.Loading {
+		if selected == nil || busyOrLoading(selected) {
 			return m, nil
 		}
-		if err := selected.Resume(); err != nil {
-			return m, m.handleError(err)
-		}
-		return m, tea.WindowSize()
+		return m, m.startResume(selected)
 	case keys.KeyEnter:
 		if m.list.NumInstances() == 0 {
 			return m, nil
 		}
 		selected := m.list.GetSelectedInstance()
-		if selected == nil || selected.Paused() || selected.Status == session.Loading || !selected.TmuxAlive() {
+		if selected == nil || selected.Paused() || busyOrLoading(selected) || !selected.TmuxAlive() {
 			return m, nil
 		}
 		// Terminal tab: attach to terminal session
@@ -962,27 +902,17 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 // instanceChanged updates the preview pane, menu, and diff pane based on the selected instance. It returns an error
 // Cmd if there was any error.
 func (m *home) instanceChanged() tea.Cmd {
+	diffCmd := m.syncSelection()
+
 	// selected may be nil
 	selected := m.list.GetSelectedInstance()
-	if selected != m.lastSelected {
-		// Scroll mode freezes a pane on the instance it was entered for.
-		m.tabbedWindow.ExitScrollModes()
-		m.lastSelected = selected
-	}
-
-	m.tabbedWindow.UpdateDiff(selected)
-	m.tabbedWindow.SetInstance(selected)
-	// Update menu with current instance
-	m.menu.SetInstance(selected)
-
-	// If there's no selected instance, we don't need to update the preview.
 	if err := m.tabbedWindow.UpdatePreview(selected); err != nil {
-		return m.handleError(err)
+		return tea.Batch(diffCmd, m.handleError(err))
 	}
 	if err := m.tabbedWindow.UpdateTerminal(selected); err != nil {
-		return m.handleError(err)
+		return tea.Batch(diffCmd, m.handleError(err))
 	}
-	return nil
+	return diffCmd
 }
 
 type keyupMsg struct{}
@@ -1002,9 +932,6 @@ func (m *home) keydownCallback(name keys.KeyName) tea.Cmd {
 
 // hideErrMsg implements tea.Msg and clears the error text from the screen.
 type hideErrMsg struct{}
-
-// previewTickMsg implements tea.Msg and triggers a preview update
-type previewTickMsg struct{}
 
 type instanceChangedMsg struct{}
 
@@ -1057,6 +984,8 @@ type instanceMetaResult struct {
 	updated   bool
 	hasPrompt bool
 	diffStats *git.DiffStats
+	// full is set when diffStats has the diff's content, not just its line counts.
+	full bool
 }
 
 // metadataUpdateDoneMsg is sent when the background metadata update completes.
@@ -1080,19 +1009,19 @@ func runInstanceStartCmd(instance *session.Instance) tea.Cmd {
 }
 
 // snapshotActiveInstances returns the currently active (started, not paused)
-// instances. Called on the main thread so the filtering doesn't race with
-// state mutations.
+// instances that no background operation is working on. Called on the main thread
+// so the filtering doesn't race with state mutations.
 func (m *home) snapshotActiveInstances() []*session.Instance {
 	var out []*session.Instance
 	for _, inst := range m.list.GetInstances() {
-		if inst.Started() && !inst.Paused() {
+		if inst.Started() && !inst.Paused() && inst.Busy() == session.NotBusy {
 			out = append(out, inst)
 		}
 	}
 	return out
 }
 
-// tickUpdateMetadataCmd returns a self-chaining Cmd that sleeps 500ms, then performs
+// tickUpdateMetadataCmd returns a self-chaining Cmd that sleeps metadataInterval, then performs
 // expensive metadata I/O (tmux capture, git diff) in parallel background goroutines.
 // Because it only re-schedules after completing, overlapping ticks are impossible.
 // The active instances slice should be snapshotted on the main thread via
@@ -1103,7 +1032,7 @@ func (m *home) snapshotActiveInstances() []*session.Instance {
 // since the diff pane only ever renders the selected one.
 func tickUpdateMetadataCmd(active []*session.Instance, selected *session.Instance) tea.Cmd {
 	return func() tea.Msg {
-		time.Sleep(500 * time.Millisecond)
+		time.Sleep(metadataInterval)
 
 		if len(active) == 0 {
 			return metadataUpdateDoneMsg{}
@@ -1120,6 +1049,7 @@ func tickUpdateMetadataCmd(active []*session.Instance, selected *session.Instanc
 				r.updated, r.hasPrompt = instance.HasUpdated()
 				if instance == selected {
 					r.diffStats = instance.ComputeDiff()
+					r.full = true
 				} else {
 					r.diffStats = instance.ComputeDiffNumstat()
 				}
@@ -1170,31 +1100,6 @@ func (m *home) cancelPromptOverlay() tea.Cmd {
 			return nil
 		},
 	)
-}
-
-// confirmAction shows a confirmation modal and stores the action to execute on confirm
-func (m *home) confirmAction(message string, action tea.Cmd) tea.Cmd {
-	m.state = stateConfirm
-
-	// Create and show the confirmation overlay using ConfirmationOverlay
-	m.confirmationOverlay = overlay.NewConfirmationOverlay(message)
-	// Set a fixed width for consistent appearance
-	m.confirmationOverlay.SetWidth(50)
-
-	// Set callbacks for confirmation and cancellation
-	m.confirmationOverlay.OnConfirm = func() {
-		m.state = stateDefault
-		// Execute the action if it exists
-		if action != nil {
-			_ = action()
-		}
-	}
-
-	m.confirmationOverlay.OnCancel = func() {
-		m.state = stateDefault
-	}
-
-	return nil
 }
 
 // confirmActionAsync shows a confirmation modal. If it's accepted, after is
