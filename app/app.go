@@ -73,10 +73,9 @@ type home struct {
 	// exeWatch restarts cs when its executable is replaced. nil disables it.
 	exeWatch *exeWatch
 
-	// lastSelected and lastTab are the instance selected and the tab active at the last
-	// syncSelection, used to notice when either changes.
+	// lastSelected is the instance selected at the last syncSelection, used to notice
+	// when the selection changes.
 	lastSelected *session.Instance
-	lastTab      int
 	// lastOutputChange is when each instance's pane content last changed, used to decide
 	// when it's Ready.
 	lastOutputChange map[*session.Instance]time.Time
@@ -237,7 +236,7 @@ func (m *home) Init() tea.Cmd {
 		m.setWindowTitle(),
 		m.spinner.Tick,
 		previewTickCmd(),
-		tickUpdateMetadataCmd(m.snapshotActiveInstances(), m.list.GetSelectedInstance()),
+		tickUpdateMetadataCmd(m.snapshotActiveInstances()),
 		checkLeftoverWorktreesCmd,
 	}
 	if m.exeWatch != nil {
@@ -327,8 +326,6 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.refreshPreview()
 	case previewCapturedMsg:
 		return m, m.handlePreviewCaptured(msg)
-	case diffComputedMsg:
-		return m, m.handleDiffComputed(msg)
 	case busyDoneMsg:
 		return m, m.handleBusyDone(msg)
 	case killDoneMsg:
@@ -364,7 +361,7 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(tea.WindowSize(), m.instanceChanged())
 	case metadataUpdateDoneMsg:
 		m.applyMetadata(msg.results, time.Now())
-		return m, tickUpdateMetadataCmd(m.snapshotActiveInstances(), m.list.GetSelectedInstance())
+		return m, tickUpdateMetadataCmd(m.snapshotActiveInstances())
 	case tea.MouseMsg:
 		if msg.Action == tea.MouseActionMotion {
 			m.handleMouseHover(msg.X, msg.Y)
@@ -902,17 +899,17 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 // instanceChanged updates the preview pane, menu, and diff pane based on the selected instance. It returns an error
 // Cmd if there was any error.
 func (m *home) instanceChanged() tea.Cmd {
-	diffCmd := m.syncSelection()
+	m.syncSelection()
 
 	// selected may be nil
 	selected := m.list.GetSelectedInstance()
 	if err := m.tabbedWindow.UpdatePreview(selected); err != nil {
-		return tea.Batch(diffCmd, m.handleError(err))
+		return m.handleError(err)
 	}
 	if err := m.tabbedWindow.UpdateTerminal(selected); err != nil {
-		return tea.Batch(diffCmd, m.handleError(err))
+		return m.handleError(err)
 	}
-	return diffCmd
+	return nil
 }
 
 type keyupMsg struct{}
@@ -984,8 +981,6 @@ type instanceMetaResult struct {
 	updated   bool
 	hasPrompt bool
 	diffStats *git.DiffStats
-	// full is set when diffStats has the diff's content, not just its line counts.
-	full bool
 }
 
 // metadataUpdateDoneMsg is sent when the background metadata update completes.
@@ -1027,10 +1022,9 @@ func (m *home) snapshotActiveInstances() []*session.Instance {
 // The active instances slice should be snapshotted on the main thread via
 // snapshotActiveInstances() before being passed here.
 //
-// Only the selected instance gets a full diff (with Content); the rest get a
-// lightweight numstat-only summary. This keeps per-instance memory bounded
-// since the diff pane only ever renders the selected one.
-func tickUpdateMetadataCmd(active []*session.Instance, selected *session.Instance) tea.Cmd {
+// Diffs are `git diff --numstat` (changed files and line counts), which stays cheap
+// however large the changes are.
+func tickUpdateMetadataCmd(active []*session.Instance) tea.Cmd {
 	return func() tea.Msg {
 		time.Sleep(metadataInterval)
 
@@ -1047,12 +1041,7 @@ func tickUpdateMetadataCmd(active []*session.Instance, selected *session.Instanc
 				r := &results[i]
 				r.instance = instance
 				r.updated, r.hasPrompt = instance.HasUpdated()
-				if instance == selected {
-					r.diffStats = instance.ComputeDiff()
-					r.full = true
-				} else {
-					r.diffStats = instance.ComputeDiffNumstat()
-				}
+				r.diffStats = instance.ComputeDiff()
 			}(idx, inst)
 		}
 		wg.Wait()

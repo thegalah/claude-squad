@@ -2,6 +2,7 @@ package session
 
 import (
 	"claude-squad/config"
+	"claude-squad/session/git"
 	"encoding/json"
 	"fmt"
 	"path/filepath"
@@ -35,11 +36,12 @@ type GitWorktreeData struct {
 	IsExistingBranch bool   `json:"is_existing_branch"`
 }
 
-// DiffStatsData represents the serializable data of a DiffStats
+// DiffStatsData represents the serializable data of a DiffStats. State files from before
+// the Diff tab listed files also have a "content" field with the full diff; it's ignored.
 type DiffStatsData struct {
-	Added   int    `json:"added"`
-	Removed int    `json:"removed"`
-	Content string `json:"content"`
+	Added   int              `json:"added"`
+	Removed int              `json:"removed"`
+	Files   []git.FileChange `json:"files,omitempty"`
 }
 
 // Storage handles saving and loading instances using the state interface

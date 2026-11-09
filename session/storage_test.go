@@ -2,6 +2,7 @@ package session
 
 import (
 	"claude-squad/config"
+	"claude-squad/session/git"
 	"encoding/json"
 	"sort"
 	"testing"
@@ -139,4 +140,22 @@ func TestTrackedWorktreePaths(t *testing.T) {
 	require.NoError(t, err)
 	sort.Strings(paths)
 	require.Equal(t, []string{"/repos/a-worktree-a1", "/repos/b-worktree-b1"}, paths)
+}
+
+// The Diff tab lists changed files, so they're saved for paused sessions. State files
+// from before that hold the full diff under "content", which is ignored.
+func TestDiffStatsDataSavesFilesAndIgnoresOldContent(t *testing.T) {
+	data := DiffStatsData{Added: 3, Removed: 1, Files: []git.FileChange{
+		{Path: "a.go", Added: 3, Removed: 1},
+		{Path: "logo.png", Binary: true},
+	}}
+	raw, err := json.Marshal(data)
+	require.NoError(t, err)
+	var back DiffStatsData
+	require.NoError(t, json.Unmarshal(raw, &back))
+	require.Equal(t, data, back)
+
+	var old DiffStatsData
+	require.NoError(t, json.Unmarshal([]byte(`{"added":2,"removed":0,"content":"diff --git a/x b/x\n+x\n"}`), &old))
+	require.Equal(t, DiffStatsData{Added: 2}, old)
 }

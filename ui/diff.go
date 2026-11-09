@@ -2,25 +2,28 @@ package ui
 
 import (
 	"claude-squad/session"
+	"claude-squad/session/git"
 	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/viewport"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/mattn/go-runewidth"
 )
 
 var (
 	AdditionStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#22c55e"))
 	DeletionStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#ef4444"))
-	HunkStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("#0ea5e9"))
+	BinaryStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#808080"))
 )
 
+// DiffPane lists the files a session changed, with their added and removed lines.
 type DiffPane struct {
 	viewport viewport.Model
-	diff     string
-	stats    string
-	width    int
-	height   int
+	// files is the list on display, kept to re-render it when the pane is resized.
+	files  []git.FileChange
+	width  int
+	height int
 }
 
 func NewDiffPane() *DiffPane {
@@ -34,64 +37,89 @@ func (d *DiffPane) SetSize(width, height int) {
 	d.height = height
 	d.viewport.Width = width
 	d.viewport.Height = height
-	// Update viewport content if diff exists
-	if d.diff != "" || d.stats != "" {
-		d.viewport.SetContent(lipgloss.JoinVertical(lipgloss.Left, d.stats, d.diff))
+	if len(d.files) > 0 {
+		d.viewport.SetContent(renderFileList(d.files, width))
 	}
 }
 
 func (d *DiffPane) SetDiff(instance *session.Instance) {
-	centeredFallbackMessage := lipgloss.Place(
-		d.width,
-		d.height,
-		lipgloss.Center,
-		lipgloss.Center,
-		"No changes",
-	)
+	d.files = nil
+	centered := func(message string) {
+		d.viewport.SetContent(lipgloss.Place(d.width, d.height, lipgloss.Center, lipgloss.Center, message))
+	}
 
 	if instance == nil || !instance.Started() {
-		d.viewport.SetContent(centeredFallbackMessage)
+		centered("No changes")
 		return
 	}
-
 	stats := instance.GetDiffStats()
-	if stats == nil {
-		// Show loading message if worktree is not ready
-		centeredMessage := lipgloss.Place(
-			d.width,
-			d.height,
-			lipgloss.Center,
-			lipgloss.Center,
-			"Setting up worktree...",
-		)
-		d.viewport.SetContent(centeredMessage)
-		return
+	switch {
+	case stats == nil:
+		// The worktree isn't ready yet.
+		centered("Setting up worktree...")
+	case stats.Error != nil:
+		centered(fmt.Sprintf("Error: %v", stats.Error))
+	case stats.IsEmpty():
+		centered("No changes")
+	default:
+		d.files = stats.Files
+		d.viewport.SetContent(renderFileList(stats.Files, d.width))
+	}
+}
+
+// renderFileList renders a summary line and one line per changed file, e.g.
+//
+//	2 files changed  +14 -3
+//
+//	  +12  -1  app/app.go
+//	   +2  -2  ui/diff.go
+//
+// Paths too long for width keep their end, which holds the file name.
+func renderFileList(files []git.FileChange, width int) string {
+	var added, removed int
+	addW, remW := 2, 2
+	for _, f := range files {
+		added += f.Added
+		removed += f.Removed
+		addW = max(addW, len(fmt.Sprintf("+%d", f.Added)))
+		remW = max(remW, len(fmt.Sprintf("-%d", f.Removed)))
 	}
 
-	if stats.Error != nil {
-		// Show error message
-		centeredMessage := lipgloss.Place(
-			d.width,
-			d.height,
-			lipgloss.Center,
-			lipgloss.Center,
-			fmt.Sprintf("Error: %v", stats.Error),
-		)
-		d.viewport.SetContent(centeredMessage)
-		return
+	noun := "files"
+	if len(files) == 1 {
+		noun = "file"
 	}
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("%d %s changed  %s %s\n\n", len(files), noun,
+		AdditionStyle.Render(fmt.Sprintf("+%d", added)), DeletionStyle.Render(fmt.Sprintf("-%d", removed))))
 
-	if stats.IsEmpty() {
-		d.stats = ""
-		d.diff = ""
-		d.viewport.SetContent(centeredFallbackMessage)
-	} else {
-		additions := AdditionStyle.Render(fmt.Sprintf("%d additions(+)", stats.Added))
-		deletions := DeletionStyle.Render(fmt.Sprintf("%d deletions(-)", stats.Removed))
-		d.stats = lipgloss.JoinHorizontal(lipgloss.Center, additions, " ", deletions)
-		d.diff = colorizeDiff(stats.Content)
-		d.viewport.SetContent(lipgloss.JoinVertical(lipgloss.Left, d.stats, d.diff))
+	countsW := addW + 1 + remW
+	pathW := width - 2 - countsW - 2
+	for _, f := range files {
+		var counts string
+		if f.Binary {
+			counts = BinaryStyle.Render(fmt.Sprintf("%*s", countsW, "binary"))
+		} else {
+			counts = AdditionStyle.Render(fmt.Sprintf("%*s", addW, fmt.Sprintf("+%d", f.Added))) + " " +
+				DeletionStyle.Render(fmt.Sprintf("%*s", remW, fmt.Sprintf("-%d", f.Removed)))
+		}
+		b.WriteString("  " + counts + "  " + truncateLeft(f.Path, pathW) + "\n")
 	}
+	return b.String()
+}
+
+// truncateLeft shortens s to width cells by dropping its start, e.g. "…/deep/file.go".
+func truncateLeft(s string, width int) string {
+	if width <= 0 || runewidth.StringWidth(s) <= width {
+		return s
+	}
+	runes := []rune(s)
+	for i := range runes {
+		if tail := string(runes[i:]); runewidth.StringWidth(tail)+1 <= width {
+			return "…" + tail
+		}
+	}
+	return "…"
 }
 
 func (d *DiffPane) String() string {
@@ -106,32 +134,4 @@ func (d *DiffPane) ScrollUp() {
 // ScrollDown scrolls the viewport down
 func (d *DiffPane) ScrollDown() {
 	d.viewport.LineDown(1)
-}
-
-func colorizeDiff(diff string) string {
-	var coloredOutput strings.Builder
-
-	lines := strings.Split(diff, "\n")
-	for _, line := range lines {
-		if len(line) > 0 {
-			if strings.HasPrefix(line, "@@") {
-				// Color hunk headers cyan
-				coloredOutput.WriteString(HunkStyle.Render(line) + "\n")
-			} else if line[0] == '+' && (len(line) == 1 || line[1] != '+') {
-				// Color added lines green, excluding metadata like '+++'
-				coloredOutput.WriteString(AdditionStyle.Render(line) + "\n")
-			} else if line[0] == '-' && (len(line) == 1 || line[1] != '-') {
-				// Color removed lines red, excluding metadata like '---'
-				coloredOutput.WriteString(DeletionStyle.Render(line) + "\n")
-			} else {
-				// Print metadata and unchanged lines without color
-				coloredOutput.WriteString(line + "\n")
-			}
-		} else {
-			// Preserve empty lines
-			coloredOutput.WriteString("\n")
-		}
-	}
-
-	return coloredOutput.String()
 }
