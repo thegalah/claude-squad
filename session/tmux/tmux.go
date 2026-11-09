@@ -45,6 +45,13 @@ type TmuxSession struct {
 	// monitor monitors the tmux pane content and sends signals to the UI when it's status changes
 	monitor *statusMonitor
 
+	// lastCapture is the latest CapturePaneContent result and when it was taken. HasUpdated
+	// reuses it while it's fresh, so the selected session's pane, which the preview
+	// captures every tick, isn't captured a second time for its status.
+	captureMu     sync.Mutex
+	lastCapture   string
+	lastCaptureAt time.Time
+
 	// Initialized by Attach
 	// Deinitilaized by Detach
 	//
@@ -104,6 +111,8 @@ func (t *TmuxSession) StartWithCommand(workDir string, command string) error {
 	if t.DoesSessionExist() {
 		return fmt.Errorf("tmux session already exists: %s", t.sanitizedName)
 	}
+
+	t.forgetCapture() // anything captured belonged to a previous session of this name
 
 	// Create a new detached tmux session and start claude in it
 	cmd := exec.Command("tmux", "new-session", "-d", "-s", t.sanitizedName, "-c", workDir, command)
@@ -250,8 +259,11 @@ func (t *TmuxSession) SendKeys(keys string) error {
 
 // HasUpdated checks if the tmux pane content has changed since the last tick. It also returns true if
 // the tmux pane has a prompt for aider or claude code.
+// statusCaptureMaxAge is how old a capture HasUpdated may reuse instead of capturing.
+const statusCaptureMaxAge = 100 * time.Millisecond
+
 func (t *TmuxSession) HasUpdated() (updated bool, hasPrompt bool) {
-	content, err := t.CapturePaneContent()
+	content, err := t.recentCapture(statusCaptureMaxAge)
 	if err != nil {
 		log.ErrorLog.Printf("error capturing pane content in status monitor: %v", err)
 		return false, false
@@ -442,6 +454,7 @@ func (t *TmuxSession) Detach() {
 
 // Close terminates the tmux session and cleans up resources
 func (t *TmuxSession) Close() error {
+	t.forgetCapture()
 	var errs []error
 
 	if t.ptmx != nil {
@@ -492,7 +505,8 @@ func (t *TmuxSession) DoesSessionExist() bool {
 	return t.cmdExec.Run(existsCmd) == nil
 }
 
-// CapturePaneContent captures the content of the tmux pane
+// CapturePaneContent captures the content of the tmux pane. It's safe to call from
+// several goroutines at once.
 func (t *TmuxSession) CapturePaneContent() (string, error) {
 	// Add -e flag to preserve escape sequences (ANSI color codes)
 	cmd := exec.Command("tmux", "capture-pane", "-p", "-e", "-J", "-t", t.sanitizedName)
@@ -500,7 +514,30 @@ func (t *TmuxSession) CapturePaneContent() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("error capturing pane content: %v", err)
 	}
-	return string(output), nil
+	content := string(output)
+	t.captureMu.Lock()
+	t.lastCapture, t.lastCaptureAt = content, time.Now()
+	t.captureMu.Unlock()
+	return content, nil
+}
+
+// recentCapture returns the latest capture if it's at most maxAge old, and otherwise
+// captures the pane.
+func (t *TmuxSession) recentCapture(maxAge time.Duration) (string, error) {
+	t.captureMu.Lock()
+	content, at := t.lastCapture, t.lastCaptureAt
+	t.captureMu.Unlock()
+	if !at.IsZero() && time.Since(at) <= maxAge {
+		return content, nil
+	}
+	return t.CapturePaneContent()
+}
+
+// forgetCapture drops the latest capture, e.g. when the session it came from goes away.
+func (t *TmuxSession) forgetCapture() {
+	t.captureMu.Lock()
+	t.lastCapture, t.lastCaptureAt = "", time.Time{}
+	t.captureMu.Unlock()
 }
 
 // CapturePaneContentWithOptions captures the pane content with additional options

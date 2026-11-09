@@ -140,3 +140,64 @@ func TestSplitAtDetachKey(t *testing.T) {
 		})
 	}
 }
+
+// newCaptureCountingSession returns a session whose capture-pane returns *content and
+// counts its calls in *captures.
+func newCaptureCountingSession(t *testing.T, content *string, captures *int) *TmuxSession {
+	exec := cmd_test.MockCmdExec{
+		RunFunc: func(cmd *exec.Cmd) error { return nil },
+		OutputFunc: func(cmd *exec.Cmd) ([]byte, error) {
+			*captures++
+			return []byte(*content), nil
+		},
+	}
+	s := newTmuxSession("shared", "claude", NewMockPtyFactory(t), exec)
+	s.monitor = newStatusMonitor()
+	return s
+}
+
+// The preview captures the selected session's pane every tick; the status check must
+// reuse that rather than capture the same pane again.
+func TestHasUpdatedReusesFreshCapture(t *testing.T) {
+	content, captures := "working", 0
+	s := newCaptureCountingSession(t, &content, &captures)
+
+	got, err := s.CapturePaneContent()
+	require.NoError(t, err)
+	require.Equal(t, "working", got)
+	updated, _ := s.HasUpdated()
+	require.True(t, updated)
+	require.Equal(t, 1, captures, "status check captured a pane the preview had just captured")
+}
+
+func TestHasUpdatedCapturesWhenNothingFresh(t *testing.T) {
+	content, captures := "working", 0
+	s := newCaptureCountingSession(t, &content, &captures)
+
+	updated, _ := s.HasUpdated() // nothing captured yet
+	require.True(t, updated)
+	require.Equal(t, 1, captures)
+
+	// An old capture isn't reused: the output has moved on since.
+	s.lastCaptureAt = s.lastCaptureAt.Add(-2 * statusCaptureMaxAge)
+	content = "still working"
+	updated, _ = s.HasUpdated()
+	require.True(t, updated)
+	require.Equal(t, 2, captures)
+
+	// Fresh and unchanged: reused, and reported as not updated.
+	updated, _ = s.HasUpdated()
+	require.False(t, updated)
+	require.Equal(t, 2, captures)
+}
+
+func TestCloseForgetsCapture(t *testing.T) {
+	content, captures := "old session", 0
+	s := newCaptureCountingSession(t, &content, &captures)
+	_, err := s.CapturePaneContent()
+	require.NoError(t, err)
+
+	_ = s.Close()
+	_, _ = s.HasUpdated()
+	require.Equal(t, 2, captures, "reused a capture from a closed session")
+}
