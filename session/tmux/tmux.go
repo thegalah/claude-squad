@@ -300,6 +300,7 @@ func splitAtDetachKey(input []byte) (forward []byte, detach bool) {
 }
 
 func (t *TmuxSession) Attach() (chan struct{}, error) {
+	t.showBackButton()
 	t.attachCh = make(chan struct{})
 
 	t.wg = &sync.WaitGroup{}
@@ -335,8 +336,9 @@ func (t *TmuxSession) Attach() (chan struct{}, error) {
 			close(timeoutCh)
 		}()
 
-		// Read input from stdin and check for Ctrl+q
-		buf := make([]byte, 32)
+		// Read input from stdin and check for Ctrl+q or a click on the back button
+		var input attachInput
+		buf := make([]byte, 256)
 		for {
 			nr, err := os.Stdin.Read(buf)
 			if err != nil {
@@ -360,7 +362,7 @@ func (t *TmuxSession) Attach() (chan struct{}, error) {
 				continue
 			}
 
-			forward, detach := splitAtDetachKey(buf[:nr])
+			forward, detach := input.filter(buf[:nr])
 			if len(forward) > 0 {
 				_, _ = t.ptmx.Write(forward)
 			}
