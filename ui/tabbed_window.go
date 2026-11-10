@@ -49,8 +49,11 @@ type TabbedWindow struct {
 	activeTab int
 	// hoverTab is the tab under the mouse pointer, or -1.
 	hoverTab int
-	height   int
-	width    int
+	// hoverOpen is set while the pointer is over a pane that a click attaches, so its tab
+	// says so.
+	hoverOpen bool
+	height    int
+	width     int
 
 	preview  *PreviewPane
 	diff     *DiffPane
@@ -120,6 +123,27 @@ func (w *TabbedWindow) SetHoverTab(tab int) {
 		tab = -1
 	}
 	w.hoverTab = tab
+}
+
+// SetHoverOpen marks whether the pointer is over the active pane and a click there would
+// attach to its session.
+func (w *TabbedWindow) SetHoverOpen(hover bool) {
+	w.hoverOpen = hover
+}
+
+// openHint is added to the active tab's name while hoverOpen is set.
+const openHint = " → click to open"
+
+// ContentAt reports whether (x, y), relative to the top-left corner of String()'s
+// output, is inside the active tab's pane, below the tab row.
+func (w *TabbedWindow) ContentAt(x, y int) bool {
+	if w.width == 0 || w.height == 0 || x < 0 {
+		return false
+	}
+	tabHeight := activeTabStyle.GetVerticalFrameSize() + 1
+	top := tabRowOffset + tabHeight
+	windowHeight := w.height - 2 - tabHeight // String()'s pane height, plus its bottom border
+	return y >= top && y < top+windowHeight && x < w.width+windowStyle.GetHorizontalFrameSize()
 }
 
 // tabRowOffset is the number of lines String() renders above the tab row.
@@ -344,6 +368,11 @@ func (w *TabbedWindow) String() string {
 			style = style.Foreground(highlightColor).Bold(true).Underline(true)
 		}
 		style = style.Width(width - style.GetHorizontalFrameSize())
+		if isActive && w.hoverOpen {
+			if hinted := t + openHint; lipgloss.Width(hinted) <= width-style.GetHorizontalFrameSize() {
+				t = hinted
+			}
+		}
 		renderedTabs = append(renderedTabs, style.Render(t))
 	}
 

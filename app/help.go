@@ -88,7 +88,7 @@ func (h helpTypeInstanceAttach) toContent() string {
 	content := lipgloss.JoinVertical(lipgloss.Left,
 		titleStyle.Render("Attaching to Instance"),
 		"",
-		descStyle.Render("To detach from a session, press ")+keyStyle.Render("ctrl-q"),
+		descStyle.Render("To detach from a session, press ")+keyStyle.Render("ctrl-q")+descStyle.Render(" or click ")+keyStyle.Render("← back")+descStyle.Render(" at the top left"),
 	)
 	return content
 }
