@@ -44,3 +44,21 @@ func TestHoverOpenAddsHintToActiveTab(t *testing.T) {
 	require.NotContains(t, w.String(), "click to open")
 	require.Contains(t, w.String(), "Preview")
 }
+
+func TestStringRerendersWhenSomethingChanges(t *testing.T) {
+	w := NewTabbedWindow(NewPreviewPane(), NewDiffPane(), NewTerminalPane())
+	w.SetSize(100, 30)
+	w.preview.SetLiveContent("first")
+	require.Contains(t, w.String(), "first")
+	require.Contains(t, w.String(), "first", "unchanged: the cached render")
+
+	w.preview.SetLiveContent("second")
+	require.Contains(t, w.String(), "second")
+	require.NotContains(t, w.String(), "first")
+
+	w.SetHoverOpen(true)
+	require.Contains(t, w.String(), "click to open")
+	before := lipgloss.Height(w.String())
+	w.SetSize(100, 20)
+	require.Equal(t, before-10, lipgloss.Height(w.String()), "resizing re-renders")
+}
