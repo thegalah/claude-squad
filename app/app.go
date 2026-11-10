@@ -10,6 +10,7 @@ import (
 	"claude-squad/ui/overlay"
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"sync"
@@ -89,6 +90,9 @@ type home struct {
 	// terminal. Bubble Tea drops that many lines from the top, so screen row y
 	// shows line y+viewOverflow of the view.
 	viewOverflow int
+	// viewIndent is how many columns the last View() shifted the list and panes right:
+	// when the menu or error box is wider than them, JoinVertical centers them under it.
+	viewIndent int
 
 	// -- State --
 
@@ -859,41 +863,47 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		}
 		return m, m.startResume(selected)
 	case keys.KeyEnter:
-		if m.list.NumInstances() == 0 {
-			return m, nil
-		}
-		selected := m.list.GetSelectedInstance()
-		if selected == nil || selected.Paused() || busyOrLoading(selected) || !selected.TmuxAlive() {
-			return m, nil
-		}
-		// Terminal tab: attach to terminal session
-		if m.tabbedWindow.IsInTerminalTab() {
-			m.showHelpScreen(helpTypeInstanceAttach{}, func() {
-				ch, err := m.tabbedWindow.AttachTerminal()
-				if err != nil {
-					m.handleError(err)
-					return
-				}
-				<-ch
-				m.state = stateDefault
-			})
-			return m, m.setWindowTitle()
-		}
-		// Show help screen before attaching
+		return m, m.attachSelected()
+	default:
+		return m, nil
+	}
+}
+
+// attachSelected attaches to the selected session, or to its terminal on the Terminal
+// tab, as Enter does. It does nothing if the session can't be attached.
+func (m *home) attachSelected() tea.Cmd {
+	if m.list.NumInstances() == 0 {
+		return nil
+	}
+	selected := m.list.GetSelectedInstance()
+	if selected == nil || selected.Paused() || busyOrLoading(selected) || !selected.TmuxAlive() {
+		return nil
+	}
+	// Terminal tab: attach to terminal session
+	if m.tabbedWindow.IsInTerminalTab() {
 		m.showHelpScreen(helpTypeInstanceAttach{}, func() {
-			ch, err := m.list.Attach()
+			ch, err := m.tabbedWindow.AttachTerminal()
 			if err != nil {
 				m.handleError(err)
 				return
 			}
 			<-ch
 			m.state = stateDefault
-			m.instanceChanged()
 		})
-		return m, m.setWindowTitle()
-	default:
-		return m, nil
+		return m.setWindowTitle()
 	}
+	// Show help screen before attaching
+	m.showHelpScreen(helpTypeInstanceAttach{}, func() {
+		ch, err := m.list.Attach()
+		if err != nil {
+			m.handleError(err)
+			return
+		}
+		<-ch
+		m.state = stateDefault
+		m.instanceChanged()
+	})
+	return m.setWindowTitle()
 }
 
 // instanceChanged updates the preview pane, menu, and diff pane based on the selected instance. It returns an error
@@ -1116,6 +1126,8 @@ func (m *home) View() string {
 		m.errBox.String(),
 	)
 	m.viewOverflow = max(0, lipgloss.Height(mainView)-m.termHeight)
+	// JoinVertical(Center) pads a narrower block with round(w/2) columns on its left.
+	m.viewIndent = int(math.Round(float64(max(0, lipgloss.Width(mainView)-lipgloss.Width(listAndPreview))) / 2))
 
 	if m.state == statePrompt {
 		if m.textInputOverlay == nil {

@@ -54,6 +54,18 @@ var hoverTitleStyle = titleStyle.Background(hoverBackground)
 
 var hoverDescStyle = listDescStyle.Background(hoverBackground)
 
+// openArrow is drawn at the right of the selected or hovered session's title line, when
+// the session can be attached; clicking it attaches.
+const openArrow = "→"
+
+// openArrowCols is the space the title line keeps for the arrow and the space after it.
+const openArrowCols = 2
+
+var openArrowStyle = lipgloss.NewStyle().Bold(true)
+
+// openArrowHoverStyle marks the arrow while the pointer is on it.
+var openArrowHoverStyle = lipgloss.NewStyle().Bold(true).Foreground(highlightColor)
+
 var mainTitle = lipgloss.NewStyle().
 	Background(lipgloss.Color("62")).
 	Foreground(lipgloss.Color("230"))
@@ -66,7 +78,9 @@ type List struct {
 	items       []*session.Instance
 	selectedIdx int
 	// hoverIdx is the item under the mouse pointer, or -1.
-	hoverIdx      int
+	hoverIdx int
+	// hoverArrow is set when the pointer is on hoverIdx's open arrow.
+	hoverArrow    bool
 	height, width int
 	renderer      *InstanceRenderer
 	autoyes       bool
@@ -160,12 +174,18 @@ func (r *InstanceRenderer) setWidth(width int) {
 const branchIcon = "Ꮧ"
 
 func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool, hasMultipleRepos bool) string {
-	return r.render(i, idx, selected, false, hasMultipleRepos)
+	return r.render(i, idx, selected, false, false, hasMultipleRepos)
 }
 
-// render is Render with hovered, which highlights an unselected instance under
-// the mouse pointer.
-func (r *InstanceRenderer) render(i *session.Instance, idx int, selected, hovered bool, hasMultipleRepos bool) string {
+// CanAttach reports whether i has a running session to attach to, as far as the list can
+// tell without asking tmux.
+func CanAttach(i *session.Instance) bool {
+	return i.Started() && !i.Paused() && i.Status != session.Loading && i.Busy() == session.NotBusy
+}
+
+// render is Render with hovered, which highlights an unselected instance under the mouse
+// pointer, and onArrow, set when the pointer is on its open arrow.
+func (r *InstanceRenderer) render(i *session.Instance, idx int, selected, hovered, onArrow bool, hasMultipleRepos bool) string {
 	prefix := fmt.Sprintf(" %d. ", idx)
 	if idx >= 10 {
 		prefix = prefix[:len(prefix)-1]
@@ -198,15 +218,25 @@ func (r *InstanceRenderer) render(i *session.Instance, idx int, selected, hovere
 
 	// Cut the title if it's too long
 	titleText := i.Title
-	widthAvail := r.width - 3 - runewidth.StringWidth(prefix) - 1
+	widthAvail := r.width - 3 - openArrowCols - runewidth.StringWidth(prefix) - 1
 	if widthAvail > 0 && runewidth.StringWidth(titleText) > widthAvail {
 		titleText = runewidth.Truncate(titleText, widthAvail-3, "...")
 	}
+	arrow := strings.Repeat(" ", openArrowCols)
+	if (selected || hovered) && CanAttach(i) {
+		style := openArrowStyle
+		if onArrow {
+			style = openArrowHoverStyle
+		}
+		arrow = style.Background(titleS.GetBackground()).Render(openArrow) +
+			titleS.UnsetPadding().Render(strings.Repeat(" ", openArrowCols-1))
+	}
 	title := titleS.Render(lipgloss.JoinHorizontal(
 		lipgloss.Left,
-		lipgloss.Place(r.width-3, 1, lipgloss.Left, lipgloss.Center, fmt.Sprintf("%s %s", prefix, titleText)),
+		lipgloss.Place(r.width-3-openArrowCols, 1, lipgloss.Left, lipgloss.Center, fmt.Sprintf("%s %s", prefix, titleText)),
 		" ",
 		join,
+		arrow,
 	))
 
 	stat := i.GetDiffStats()
@@ -365,7 +395,8 @@ const (
 func (l *List) renderItems() []string {
 	rendered := make([]string, len(l.items))
 	for i, item := range l.items {
-		rendered[i] = l.renderer.render(item, i+1, i == l.selectedIdx, i == l.hoverIdx, len(l.repos) > 1)
+		hovered := i == l.hoverIdx
+		rendered[i] = l.renderer.render(item, i+1, i == l.selectedIdx, hovered, hovered && l.hoverArrow, len(l.repos) > 1)
 	}
 	return rendered
 }
@@ -373,22 +404,59 @@ func (l *List) renderItems() []string {
 // ItemAt returns the index of the item rendered on line y of String()'s output,
 // or -1 if there is none (including the blank lines between items).
 func (l *List) ItemAt(y int) int {
+	idx, _ := l.itemLineAt(y)
+	return idx
+}
+
+// itemLineAt returns the item rendered on line y of String()'s output and which of the
+// item's lines y is, or -1 if y isn't on an item.
+func (l *List) itemLineAt(y int) (idx, line int) {
 	if y < listItemsOffset {
-		return -1
+		return -1, 0
 	}
 	top := listItemsOffset
 	for i, item := range l.renderItems() {
 		height := lipgloss.Height(item)
 		if y < top+height {
-			return i
+			return i, y - top
 		}
 		top += height
 		if y < top+listItemGapLines {
-			return -1 // the gap after item i
+			return -1, 0 // the gap after item i
 		}
 		top += listItemGapLines
 	}
-	return -1
+	return -1, 0
+}
+
+// titleLine is the line of a rendered item that holds its title, below the top padding.
+const titleLine = 1
+
+// OpenArrowAt returns the item whose open arrow is at (x, y) of String()'s output, or -1.
+// The arrow's target is a little larger than the arrow: the cells beside it, and the
+// line below it.
+func (l *List) OpenArrowAt(x, y int) int {
+	idx, line := l.itemLineAt(y)
+	if idx < 0 || (line != titleLine && line != titleLine+1) {
+		return -1
+	}
+	if (idx != l.selectedIdx && idx != l.hoverIdx) || !CanAttach(l.items[idx]) {
+		return -1
+	}
+	// The title line is the style's left padding, the title, a space, the status icon
+	// (two cells), then the arrow.
+	col := 1 + (l.renderer.width - 3 - openArrowCols) + 1 + 2
+	if x < col-1 || x > col+1 {
+		return -1
+	}
+	return idx
+}
+
+// SetHover marks the item under the mouse pointer (-1 for none), and whether the pointer
+// is on its open arrow.
+func (l *List) SetHover(idx int, onArrow bool) {
+	l.SetHoverIdx(idx)
+	l.hoverArrow = onArrow && l.hoverIdx >= 0
 }
 
 // SetHoverIdx marks the item under the mouse pointer; -1 means none.
@@ -397,6 +465,7 @@ func (l *List) SetHoverIdx(idx int) {
 		idx = -1
 	}
 	l.hoverIdx = idx
+	l.hoverArrow = false
 }
 
 // Down selects the next item in the list.
