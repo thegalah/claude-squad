@@ -270,7 +270,40 @@ func TestMetadataIgnoresKilledInstance(t *testing.T) {
 	before := alpha.Status
 
 	// A pass that began before the kill.
-	h.applyMetadata([]instanceMetaResult{{instance: alpha, updated: true, diffStats: &git.DiffStats{Added: 1}}}, time.Now())
+	h.applyMetadata([]instanceMetaResult{{instance: alpha, updated: true, diffed: true, diffStats: &git.DiffStats{Added: 1}}}, time.Now())
 	require.Equal(t, before, alpha.Status)
 	require.NotContains(t, h.lastOutputChange, alpha)
+}
+
+func TestPreviewFrameIsOneMessage(t *testing.T) {
+	alpha, pane := startedInstance(t, "alpha", true)
+	h := newResponsiveTestHome(t, alpha)
+	pane.content.Store("frame 1")
+	captured := findMsg[previewCapturedMsg](t, runCmd(h.refreshPreview()))
+
+	// Showing a capture schedules the next one directly, with no tick message between.
+	pane.content.Store("frame 2")
+	next := runCmd(h.handlePreviewCaptured(captured))
+	require.Len(t, next, 1)
+	captured = findMsg[previewCapturedMsg](t, next)
+	h.Update(captured)
+	require.Contains(t, h.View(), "frame 2")
+}
+
+func TestStatusOnlyPassKeepsDiffStats(t *testing.T) {
+	alpha, _ := startedInstance(t, "alpha", true)
+	h := newResponsiveTestHome(t, alpha)
+	h.applyMetadata([]instanceMetaResult{{instance: alpha, diffed: true, diffStats: &git.DiffStats{Added: 3}}}, time.Now())
+	h.applyMetadata([]instanceMetaResult{{instance: alpha}}, time.Now())
+	require.Equal(t, 3, alpha.GetDiffStats().Added, "a pass that didn't diff must not clear the stats")
+}
+
+func TestDiffsEveryFewMetadataPasses(t *testing.T) {
+	h := newResponsiveTestHome(t)
+	var diffed []bool
+	for range 2 * diffEvery {
+		h.nextMetadataPass()
+		diffed = append(diffed, h.metadataPasses%diffEvery == 1)
+	}
+	require.Equal(t, []bool{true, false, false, false, true, false, false, false}, diffed)
 }

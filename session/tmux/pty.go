@@ -15,8 +15,16 @@ type PtyFactory interface {
 // Pty starts a "real" pseudo-terminal (PTY) using the creack/pty package.
 type Pty struct{}
 
+// Start starts cmd on a new PTY. The process is reaped when it exits (tmux new-session -d
+// exits once the session is up, and attach-session when its PTY is closed on detach), so
+// it doesn't linger as a zombie.
 func (pt Pty) Start(cmd *exec.Cmd) (*os.File, error) {
-	return pty.Start(cmd)
+	ptmx, err := pty.Start(cmd)
+	if err != nil {
+		return nil, err
+	}
+	go func() { _ = cmd.Wait() }()
+	return ptmx, nil
 }
 
 func (pt Pty) Close() {}

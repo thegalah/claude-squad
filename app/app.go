@@ -93,6 +93,11 @@ type home struct {
 	// viewIndent is how many columns the last View() shifted the list and panes right:
 	// when the menu or error box is wider than them, JoinVertical centers them under it.
 	viewIndent int
+	// lastView caches View()'s layout of the screen, which only needs redoing when one of
+	// its parts changed: most redraws (spinner frames, preview ticks) change nothing.
+	lastView viewParts
+	// metadataPasses counts metadata passes, to compute diffs on every diffEvery-th.
+	metadataPasses int
 
 	// -- State --
 
@@ -240,7 +245,7 @@ func (m *home) Init() tea.Cmd {
 		m.setWindowTitle(),
 		m.spinner.Tick,
 		previewTickCmd(),
-		tickUpdateMetadataCmd(m.snapshotActiveInstances()),
+		m.nextMetadataPass(),
 		checkLeftoverWorktreesCmd,
 	}
 	if m.exeWatch != nil {
@@ -365,7 +370,7 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(tea.WindowSize(), m.instanceChanged())
 	case metadataUpdateDoneMsg:
 		m.applyMetadata(msg.results, time.Now())
-		return m, tickUpdateMetadataCmd(m.snapshotActiveInstances())
+		return m, m.nextMetadataPass()
 	case tea.MouseMsg:
 		if msg.Action == tea.MouseActionMotion {
 			m.handleMouseHover(msg.X, msg.Y)
@@ -990,6 +995,8 @@ type instanceMetaResult struct {
 	instance  *session.Instance
 	updated   bool
 	hasPrompt bool
+	// diffed is set if the pass computed diffStats; most passes only check the status.
+	diffed    bool
 	diffStats *git.DiffStats
 }
 
@@ -1026,6 +1033,15 @@ func (m *home) snapshotActiveInstances() []*session.Instance {
 	return out
 }
 
+// diffEvery is how many metadata passes there are per diff refresh: once a second.
+const diffEvery = 4
+
+// nextMetadataPass schedules the next metadata pass over the active instances.
+func (m *home) nextMetadataPass() tea.Cmd {
+	m.metadataPasses++
+	return tickUpdateMetadataCmd(m.snapshotActiveInstances(), m.metadataPasses%diffEvery == 1)
+}
+
 // tickUpdateMetadataCmd returns a self-chaining Cmd that sleeps metadataInterval, then performs
 // expensive metadata I/O (tmux capture, git diff) in parallel background goroutines.
 // Because it only re-schedules after completing, overlapping ticks are impossible.
@@ -1034,7 +1050,10 @@ func (m *home) snapshotActiveInstances() []*session.Instance {
 //
 // Diffs are `git diff --numstat` (changed files and line counts), which stays cheap
 // however large the changes are.
-func tickUpdateMetadataCmd(active []*session.Instance) tea.Cmd {
+//
+// withDiff says whether to compute diffs too: they're only refreshed every diffEvery
+// passes, since each one runs two git commands per session.
+func tickUpdateMetadataCmd(active []*session.Instance, withDiff bool) tea.Cmd {
 	return func() tea.Msg {
 		time.Sleep(metadataInterval)
 
@@ -1051,7 +1070,9 @@ func tickUpdateMetadataCmd(active []*session.Instance) tea.Cmd {
 				r := &results[i]
 				r.instance = instance
 				r.updated, r.hasPrompt = instance.HasUpdated()
-				r.diffStats = instance.ComputeDiff()
+				if withDiff {
+					r.diffed, r.diffStats = true, instance.ComputeDiff()
+				}
 			}(idx, inst)
 		}
 		wg.Wait()
@@ -1114,20 +1135,49 @@ func (m *home) confirmActionAsync(message string, after func() tea.Cmd) {
 	m.confirmationOverlay.OnCancel = func() {}
 }
 
-func (m *home) View() string {
-	listWithPadding := lipgloss.NewStyle().PaddingTop(1).Render(m.list.String())
-	previewWithPadding := lipgloss.NewStyle().PaddingTop(1).Render(m.tabbedWindow.String())
+// viewParts is what View() lays out, and the layout.
+type viewParts struct {
+	list, window, menu, errBox string
+	termHeight                 int
+	mainView                   string
+}
+
+// layout returns the screen with the list and panes side by side above the menu and
+// error box, reusing the last layout if none of them changed.
+func (m *home) layout() string {
+	parts := viewParts{
+		list:       m.list.String(),
+		window:     m.tabbedWindow.String(),
+		menu:       m.menu.String(),
+		errBox:     m.errBox.String(),
+		termHeight: m.termHeight,
+	}
+	last := m.lastView
+	last.mainView = ""
+	if parts == last {
+		return m.lastView.mainView
+	}
+
+	listWithPadding := lipgloss.NewStyle().PaddingTop(1).Render(parts.list)
+	previewWithPadding := lipgloss.NewStyle().PaddingTop(1).Render(parts.window)
 	listAndPreview := lipgloss.JoinHorizontal(lipgloss.Top, listWithPadding, previewWithPadding)
 
 	mainView := lipgloss.JoinVertical(
 		lipgloss.Center,
 		listAndPreview,
-		m.menu.String(),
-		m.errBox.String(),
+		parts.menu,
+		parts.errBox,
 	)
 	m.viewOverflow = max(0, lipgloss.Height(mainView)-m.termHeight)
 	// JoinVertical(Center) pads a narrower block with round(w/2) columns on its left.
 	m.viewIndent = int(math.Round(float64(max(0, lipgloss.Width(mainView)-lipgloss.Width(listAndPreview))) / 2))
+	parts.mainView = mainView
+	m.lastView = parts
+	return mainView
+}
+
+func (m *home) View() string {
+	mainView := m.layout()
 
 	if m.state == statePrompt {
 		if m.textInputOverlay == nil {

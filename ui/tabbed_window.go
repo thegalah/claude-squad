@@ -59,6 +59,21 @@ type TabbedWindow struct {
 	diff     *DiffPane
 	terminal *TerminalPane
 	instance *session.Instance
+
+	// rendered is the last String() output and what it was rendered from. The view is
+	// redrawn many times a second, mostly with nothing changed, and rendering the borders
+	// around a full pane is the most expensive part of it.
+	rendered    string
+	renderedKey windowRenderKey
+}
+
+// windowRenderKey is everything String()'s output depends on.
+type windowRenderKey struct {
+	content       string
+	activeTab     int
+	hoverTab      int
+	hoverOpen     bool
+	width, height int
 }
 
 func NewTabbedWindow(preview *PreviewPane, diff *DiffPane, terminal *TerminalPane) *TabbedWindow {
@@ -338,6 +353,31 @@ func (w *TabbedWindow) String() string {
 		return ""
 	}
 
+	var content string
+	switch w.activeTab {
+	case PreviewTab:
+		content = w.preview.String()
+	case DiffTab:
+		content = w.diff.String()
+	case TerminalTab:
+		content = w.terminal.String()
+	}
+	key := windowRenderKey{
+		content:   content,
+		activeTab: w.activeTab,
+		hoverTab:  w.hoverTab,
+		hoverOpen: w.hoverOpen,
+		width:     w.width,
+		height:    w.height,
+	}
+	if key != w.renderedKey {
+		w.rendered, w.renderedKey = w.render(content), key
+	}
+	return w.rendered
+}
+
+// render renders the tabs, and content in the active tab's pane.
+func (w *TabbedWindow) render(content string) string {
 	var renderedTabs []string
 
 	tabWidths := w.tabWidths()
@@ -377,15 +417,6 @@ func (w *TabbedWindow) String() string {
 	}
 
 	row := lipgloss.JoinHorizontal(lipgloss.Top, renderedTabs...)
-	var content string
-	switch w.activeTab {
-	case PreviewTab:
-		content = w.preview.String()
-	case DiffTab:
-		content = w.diff.String()
-	case TerminalTab:
-		content = w.terminal.String()
-	}
 	window := windowStyle.Render(
 		lipgloss.Place(
 			w.width, w.height-2-windowStyle.GetVerticalFrameSize()-tabHeight,

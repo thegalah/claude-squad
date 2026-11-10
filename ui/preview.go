@@ -23,6 +23,16 @@ type PreviewPane struct {
 
 	// spinner animates the current step while an instance is being set up. May be nil.
 	spinner *spinner.Model
+
+	// rendered is the last String() output outside scroll mode, and what it was rendered
+	// from: the pane is redrawn many times a second, usually unchanged.
+	rendered    string
+	renderedKey previewRenderKey
+}
+
+type previewRenderKey struct {
+	state         previewState
+	width, height int
 }
 
 type previewState struct {
@@ -154,6 +164,19 @@ func (p *PreviewPane) String() string {
 	if p.width == 0 || p.height == 0 {
 		return strings.Repeat("\n", p.height)
 	}
+	// If in copy mode, use the viewport to display scrollable content
+	if p.isScrolling {
+		return p.viewport.View()
+	}
+	key := previewRenderKey{state: p.previewState, width: p.width, height: p.height}
+	if key != p.renderedKey {
+		p.rendered, p.renderedKey = p.render(), key
+	}
+	return p.rendered
+}
+
+// render renders the pane outside scroll mode.
+func (p *PreviewPane) render() string {
 
 	if p.previewState.fallback {
 		// Calculate available height for fallback text
@@ -186,11 +209,6 @@ func (p *PreviewPane) String() string {
 			Width(p.width).
 			Align(lipgloss.Center).
 			Render(strings.Join(lines, ""))
-	}
-
-	// If in copy mode, use the viewport to display scrollable content
-	if p.isScrolling {
-		return p.viewport.View()
 	}
 
 	// Normal mode display
