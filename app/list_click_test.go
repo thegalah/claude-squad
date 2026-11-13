@@ -73,3 +73,20 @@ func TestHoveringSessionHighlightsIt(t *testing.T) {
 	hover(h, bx, by+10) // below the last session
 	require.Equal(t, plain, h.View())
 }
+
+func TestTerminalTitleNamesSelectedSession(t *testing.T) {
+	h := newListClickTestHome(t, "alpha", "bravo")
+	h.repoName = "repo"
+	h.Update(hideErrMsg{})
+	require.Equal(t, "cs · repo · alpha", h.shownTitle)
+	require.Nil(t, h.updateWindowTitle(), "unchanged title isn't re-sent")
+
+	x, y := screenPosition(t, h, "bravo", "bravo")
+	click(h, x, y)
+	require.Equal(t, "cs · repo · bravo", h.shownTitle)
+
+	h.list.Kill()
+	h.list.Kill()
+	h.Update(hideErrMsg{})
+	require.Equal(t, "cs · repo", h.shownTitle)
+}

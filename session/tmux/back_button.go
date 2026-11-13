@@ -33,6 +33,9 @@ func (t *TmuxSession) showBackButton() {
 		set("status-left-length", strconv.Itoa(backButtonCols+1)),
 		set("window-status-format", ""),
 		set("window-status-current-format", ""),
+		// cs sets the terminal title to name the session before attaching; keep tmux from
+		// replacing it if set-titles is on globally.
+		set("set-titles", "off"),
 	} {
 		if i > 0 {
 			args = append(args, ";")

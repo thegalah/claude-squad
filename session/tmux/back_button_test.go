@@ -104,4 +104,5 @@ func TestShowBackButtonSetsStatusLine(t *testing.T) {
 	require.Contains(t, ran[0], "status-position top")
 	require.Contains(t, ran[0], "← back")
 	require.Contains(t, ran[0], "-t claudesquad_mysession")
+	require.Contains(t, ran[0], "set-titles off")
 }
