@@ -13,6 +13,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -64,6 +65,8 @@ type home struct {
 	autoYes bool
 	// repoName is the base name of the repo this cs process is scoped to.
 	repoName string
+	// shownTitle is the terminal title last sent, so it's only re-sent when it changes.
+	shownTitle string
 
 	// storage is the interface for saving/loading data to/from the app's state
 	storage *session.Storage
@@ -260,19 +263,56 @@ func (m *home) Init() tea.Cmd {
 // restartedMsg shows a notice after cs restarted itself for an update.
 type restartedMsg struct{ notice string }
 
-// windowTitle is the terminal window/tab title, e.g. "cs · claude-squad".
-func windowTitle(repoName string) string {
-	if repoName == "" {
-		return "cs"
+// windowTitle is the terminal window/tab title: "cs · <repo> · <session>", leaving out
+// the parts that are empty.
+func windowTitle(repoName, sessionTitle string) string {
+	title := "cs"
+	for _, part := range []string{repoName, sessionTitle} {
+		if part = strings.TrimSpace(part); part != "" {
+			title += " · " + part
+		}
 	}
-	return "cs · " + repoName
+	return title
+}
+
+// currentWindowTitle is the title for the current state, naming the selected session.
+func (m *home) currentWindowTitle() string {
+	var sessionTitle string
+	if selected := m.list.GetSelectedInstance(); selected != nil {
+		sessionTitle = selected.Title
+	}
+	return windowTitle(m.repoName, sessionTitle)
 }
 
 // setWindowTitle sets the terminal title. It's also re-sent after detaching from a session,
 // since the attached program (or tmux) may have changed it.
 func (m *home) setWindowTitle() tea.Cmd {
-	return tea.SetWindowTitle(windowTitle(m.repoName))
+	m.shownTitle = m.currentWindowTitle()
+	return tea.SetWindowTitle(m.shownTitle)
 }
+
+// updateWindowTitle sets the terminal title if it's changed, e.g. because another
+// session was selected.
+func (m *home) updateWindowTitle() tea.Cmd {
+	if m.currentWindowTitle() == m.shownTitle {
+		return nil
+	}
+	return m.setWindowTitle()
+}
+
+// showWindowTitleNow writes the title for the selected session straight to the terminal.
+// It's used just before attaching: Update is blocked while attached, so a title Cmd for
+// a selection made in the same Update (e.g. clicking another session's arrow) wouldn't
+// run until after detaching.
+func (m *home) showWindowTitleNow() {
+	m.shownTitle = m.currentWindowTitle()
+	if _, err := fmt.Fprint(os.Stdout, osc2(m.shownTitle)); err != nil {
+		log.WarningLog.Printf("could not set the terminal title: %v", err)
+	}
+}
+
+// osc2 is the escape sequence that sets the terminal title.
+func osc2(title string) string { return "\x1b]2;" + title + "\x07" }
 
 // leftoverWorktreesMsg reports how many leftover worktrees were found at startup.
 type leftoverWorktreesMsg struct{ count int }
@@ -299,6 +339,15 @@ func leftoverWorktreesNotice(count int) string {
 }
 
 func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	model, cmd := m.update(msg)
+	// The title names the selected session, which many messages can change.
+	if title := m.updateWindowTitle(); title != nil {
+		cmd = tea.Batch(cmd, title)
+	}
+	return model, cmd
+}
+
+func (m *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case hideErrMsg:
 		m.errBox.Clear()
@@ -887,6 +936,7 @@ func (m *home) attachSelected() tea.Cmd {
 	// Terminal tab: attach to terminal session
 	if m.tabbedWindow.IsInTerminalTab() {
 		m.showHelpScreen(helpTypeInstanceAttach{}, func() {
+			m.showWindowTitleNow()
 			ch, err := m.tabbedWindow.AttachTerminal()
 			if err != nil {
 				m.handleError(err)
@@ -899,6 +949,7 @@ func (m *home) attachSelected() tea.Cmd {
 	}
 	// Show help screen before attaching
 	m.showHelpScreen(helpTypeInstanceAttach{}, func() {
+		m.showWindowTitleNow()
 		ch, err := m.list.Attach()
 		if err != nil {
 			m.handleError(err)

@@ -466,6 +466,9 @@ func TestConfirmationModalVisualAppearance(t *testing.T) {
 }
 
 func TestWindowTitle(t *testing.T) {
-	assert.Equal(t, "cs · claude-squad", windowTitle("claude-squad"))
-	assert.Equal(t, "cs", windowTitle(""))
+	assert.Equal(t, "cs · claude-squad · fix-diff", windowTitle("claude-squad", "fix-diff"))
+	assert.Equal(t, "cs · claude-squad", windowTitle("claude-squad", ""))
+	assert.Equal(t, "cs · claude-squad", windowTitle("claude-squad", "  "))
+	assert.Equal(t, "cs · fix-diff", windowTitle("", "fix-diff"))
+	assert.Equal(t, "cs", windowTitle("", ""))
 }
