@@ -3,6 +3,7 @@ package ui
 import (
 	"claude-squad/log"
 	"claude-squad/session"
+	"claude-squad/session/git"
 	"errors"
 	"fmt"
 	"strings"
@@ -80,7 +81,9 @@ type List struct {
 	// hoverIdx is the item under the mouse pointer, or -1.
 	hoverIdx int
 	// hoverArrow is set when the pointer is on hoverIdx's open arrow.
-	hoverArrow    bool
+	hoverArrow bool
+	// hoverPR is set when the pointer is on hoverIdx's pull request badge.
+	hoverPR       bool
 	height, width int
 	renderer      *InstanceRenderer
 	autoyes       bool
@@ -174,7 +177,7 @@ func (r *InstanceRenderer) setWidth(width int) {
 const branchIcon = "Ꮧ"
 
 func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool, hasMultipleRepos bool) string {
-	return r.render(i, idx, selected, false, false, hasMultipleRepos)
+	return r.render(i, idx, selected, false, false, false, hasMultipleRepos)
 }
 
 // CanAttach reports whether i has a running session to attach to, as far as the list can
@@ -183,13 +186,92 @@ func CanAttach(i *session.Instance) bool {
 	return i.Started() && !i.Paused() && i.Status != session.Loading && i.Busy() == session.NotBusy
 }
 
-// render is Render with hovered, which highlights an unselected instance under the mouse
-// pointer, and onArrow, set when the pointer is on its open arrow.
-func (r *InstanceRenderer) render(i *session.Instance, idx int, selected, hovered, onArrow bool, hasMultipleRepos bool) string {
+// itemPrefix is the " 1. " in front of item idx's title.
+func itemPrefix(idx int) string {
 	prefix := fmt.Sprintf(" %d. ", idx)
 	if idx >= 10 {
 		prefix = prefix[:len(prefix)-1]
 	}
+	return prefix
+}
+
+// diffTexts returns the "+N" and "-M " drawn at the right of an instance's branch line, or
+// empty strings when there's nothing to show.
+func diffTexts(stat *git.DiffStats) (added, removed string) {
+	if stat == nil || stat.Error != nil || stat.IsEmpty() {
+		return "", ""
+	}
+	return fmt.Sprintf("+%d", stat.Added), fmt.Sprintf("-%d ", stat.Removed)
+}
+
+// diffTextWidth is the width of the diff stats drawn on the branch line, with the comma.
+func diffTextWidth(stat *git.DiffStats) int {
+	added, removed := diffTexts(stat)
+	w := runewidth.StringWidth(added) + runewidth.StringWidth(removed)
+	if w > 0 {
+		w++
+	}
+	return w
+}
+
+// prBadgeText returns the pull request badge drawn on i's branch line, " #31 " with the
+// spaces around it, or "" when there's none to show: no pull request, or the line shows
+// what the instance is doing instead.
+func prBadgeText(i *session.Instance) string {
+	pr := i.PullRequest()
+	if pr == nil || pr.Number <= 0 || i.Status == session.Loading || i.Busy() != session.NotBusy {
+		return ""
+	}
+	return fmt.Sprintf(" #%d ", pr.Number)
+}
+
+// prBadgeSpan returns the columns [start, end) of the branch line (after the row's left
+// padding) that i's pull request badge takes as item idx, just left of the diff stats, or
+// -1, -1 when it isn't drawn. The badge is dropped before the diff stats when the row is
+// too narrow for both; the branch name gives way first.
+func (r *InstanceRenderer) prBadgeSpan(i *session.Instance, idx int) (start, end int) {
+	badge := prBadgeText(i)
+	if badge == "" {
+		return -1, -1
+	}
+	w := runewidth.StringWidth(badge)
+	diffW := diffTextWidth(i.GetDiffStats())
+	room := r.width - len(itemPrefix(idx)) - runewidth.StringWidth(branchIcon) - 2 - diffW
+	if room < w {
+		return -1, -1
+	}
+	end = r.width - diffW
+	return end - w, end
+}
+
+// prColors are the light- and dark-background colors of each pull request state, after
+// GitHub's.
+var prColors = map[git.PRState]lipgloss.AdaptiveColor{
+	git.PROpen:   {Light: "#1a7f37", Dark: "#3fb950"},
+	git.PRDraft:  {Light: "#59636e", Dark: "#9198a1"},
+	git.PRMerged: {Light: "#8250df", Dark: "#ab7df8"},
+	git.PRClosed: {Light: "#cf222e", Dark: "#f85149"},
+}
+
+// prBadgeStyle styles the "#31" of a pull request badge in state. The selected row's
+// background is light whatever the terminal's, so it always gets the light colors.
+func prBadgeStyle(state git.PRState, selected, hovered bool) lipgloss.Style {
+	c, ok := prColors[state]
+	if !ok {
+		c = prColors[git.PRClosed]
+	}
+	st := lipgloss.NewStyle().Foreground(c)
+	if selected {
+		st = st.Foreground(lipgloss.Color(c.Light))
+	}
+	return st.Underline(hovered)
+}
+
+// render is Render with hovered, which highlights an unselected instance under the mouse
+// pointer, onArrow, set when the pointer is on its open arrow, and onPR, set when it's on
+// its pull request badge.
+func (r *InstanceRenderer) render(i *session.Instance, idx int, selected, hovered, onArrow, onPR bool, hasMultipleRepos bool) string {
+	prefix := itemPrefix(idx)
 	titleS := selectedTitleStyle
 	descS := selectedDescStyle
 	if !selected && hovered {
@@ -242,15 +324,9 @@ func (r *InstanceRenderer) render(i *session.Instance, idx int, selected, hovere
 	stat := i.GetDiffStats()
 
 	var diff string
-	var addedDiff, removedDiff string
-	if stat == nil || stat.Error != nil || stat.IsEmpty() {
-		// Don't show diff stats if there's an error or if they don't exist
-		addedDiff = ""
-		removedDiff = ""
-		diff = ""
-	} else {
-		addedDiff = fmt.Sprintf("+%d", stat.Added)
-		removedDiff = fmt.Sprintf("-%d ", stat.Removed)
+	// Diff stats aren't shown if there's an error or if they don't exist.
+	addedDiff, removedDiff := diffTexts(stat)
+	if addedDiff != "" {
 		diff = lipgloss.JoinHorizontal(
 			lipgloss.Center,
 			addedLinesStyle.Background(descS.GetBackground()).Render(addedDiff),
@@ -264,13 +340,19 @@ func (r *InstanceRenderer) render(i *session.Instance, idx int, selected, hovere
 	remainingWidth -= runewidth.StringWidth(branchIcon)
 	remainingWidth -= 2 // for the literal " " and "-" in the branchLine format string
 
-	diffWidth := runewidth.StringWidth(addedDiff) + runewidth.StringWidth(removedDiff)
-	if diffWidth > 0 {
-		diffWidth += 1
-	}
-
 	// Use fixed width for diff stats to avoid layout issues
-	remainingWidth -= diffWidth
+	remainingWidth -= diffTextWidth(stat)
+
+	// The pull request badge goes just left of the diff stats, if it fits.
+	var badge string
+	if start, end := r.prBadgeSpan(i, idx); start >= 0 {
+		plain := lipgloss.NewStyle().Background(descS.GetBackground()).Foreground(descS.GetForeground())
+		pr := i.PullRequest()
+		badge = plain.Render(" ") +
+			prBadgeStyle(pr.State, selected, onPR).Background(descS.GetBackground()).Render(fmt.Sprintf("#%d", pr.Number)) +
+			plain.Render(" ")
+		remainingWidth -= end - start
+	}
 
 	branch := i.Branch
 	if i.Started() && hasMultipleRepos {
@@ -301,7 +383,7 @@ func (r *InstanceRenderer) render(i *session.Instance, idx int, selected, hovere
 		spaces = strings.Repeat(" ", remainingWidth)
 	}
 
-	branchLine := fmt.Sprintf("%s %s-%s%s%s", strings.Repeat(" ", len(prefix)), branchIcon, branch, spaces, diff)
+	branchLine := fmt.Sprintf("%s %s-%s%s%s%s", strings.Repeat(" ", len(prefix)), branchIcon, branch, spaces, badge, diff)
 	if i.Status == session.Loading {
 		// The branch isn't interesting yet: say what setup is doing instead, so a slow start
 		// (e.g. a long setup script) doesn't look like a hang.
@@ -396,7 +478,7 @@ func (l *List) renderItems() []string {
 	rendered := make([]string, len(l.items))
 	for i, item := range l.items {
 		hovered := i == l.hoverIdx
-		rendered[i] = l.renderer.render(item, i+1, i == l.selectedIdx, hovered, hovered && l.hoverArrow, len(l.repos) > 1)
+		rendered[i] = l.renderer.render(item, i+1, i == l.selectedIdx, hovered, hovered && l.hoverArrow, hovered && l.hoverPR, len(l.repos) > 1)
 	}
 	return rendered
 }
@@ -452,11 +534,32 @@ func (l *List) OpenArrowAt(x, y int) int {
 	return idx
 }
 
+// PRBadgeAt returns the item whose pull request badge is at (x, y) of String()'s output,
+// or -1. The target includes the spaces either side of the "#31".
+func (l *List) PRBadgeAt(x, y int) int {
+	idx, line := l.itemLineAt(y)
+	if idx < 0 || line != titleLine+1 {
+		return -1
+	}
+	start, end := l.renderer.prBadgeSpan(l.items[idx], idx+1)
+	// The branch line starts after the style's left padding.
+	if start < 0 || x < 1+start || x >= 1+end {
+		return -1
+	}
+	return idx
+}
+
 // SetHover marks the item under the mouse pointer (-1 for none), and whether the pointer
 // is on its open arrow.
 func (l *List) SetHover(idx int, onArrow bool) {
 	l.SetHoverIdx(idx)
 	l.hoverArrow = onArrow && l.hoverIdx >= 0
+}
+
+// SetHoverPR marks whether the pointer is on the hovered item's pull request badge. Call it
+// after SetHoverIdx.
+func (l *List) SetHoverPR(onPR bool) {
+	l.hoverPR = onPR && l.hoverIdx >= 0
 }
 
 // SetHoverIdx marks the item under the mouse pointer; -1 means none.
@@ -466,6 +569,7 @@ func (l *List) SetHoverIdx(idx int) {
 	}
 	l.hoverIdx = idx
 	l.hoverArrow = false
+	l.hoverPR = false
 }
 
 // Down selects the next item in the list.

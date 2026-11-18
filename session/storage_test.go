@@ -159,3 +159,31 @@ func TestDiffStatsDataSavesFilesAndIgnoresOldContent(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(`{"added":2,"removed":0,"content":"diff --git a/x b/x\n+x\n"}`), &old))
 	require.Equal(t, DiffStatsData{Added: 2}, old)
 }
+
+// The list shows each session's pull request, so it's saved for paused sessions.
+func TestPausedInstanceKeepsPullRequest(t *testing.T) {
+	pr := &git.PullRequest{Number: 31, State: git.PRMerged, URL: "https://github.com/me/app/pull/31"}
+	inst, err := FromInstanceData(InstanceData{
+		Title:       "paused",
+		Status:      Paused,
+		Program:     "claude",
+		Worktree:    GitWorktreeData{RepoPath: "/repos/a", WorktreePath: "/wt/a", BranchName: "me/feat"},
+		PullRequest: pr,
+	})
+	require.NoError(t, err)
+	require.Equal(t, pr, inst.PullRequest())
+	ref, ok := inst.PullRequestRef()
+	require.True(t, ok)
+	require.Equal(t, git.BranchRef{RepoPath: "/repos/a", Branch: "me/feat"}, ref)
+
+	raw, err := json.Marshal(inst.ToInstanceData())
+	require.NoError(t, err)
+	var back InstanceData
+	require.NoError(t, json.Unmarshal(raw, &back))
+	require.Equal(t, pr, back.PullRequest)
+
+	inst.SetPullRequest(nil)
+	raw, err = json.Marshal(inst.ToInstanceData())
+	require.NoError(t, err)
+	require.NotContains(t, string(raw), "pull_request")
+}

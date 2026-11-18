@@ -24,6 +24,9 @@ type InstanceData struct {
 	Program   string          `json:"program"`
 	Worktree  GitWorktreeData `json:"worktree"`
 	DiffStats DiffStatsData   `json:"diff_stats"`
+	// PullRequest is the GitHub pull request from the instance's branch, so paused
+	// instances keep showing it.
+	PullRequest *git.PullRequest `json:"pull_request,omitempty"`
 }
 
 // GitWorktreeData represents the serializable data of a GitWorktree

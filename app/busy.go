@@ -92,7 +92,7 @@ func (m *home) handleBusyDone(msg busyDoneMsg) tea.Cmd {
 		cmds = append(cmds, tea.WindowSize()) // size the restarted session's pane
 	case session.BusyPushing:
 		if msg.err == nil {
-			cmds = append(cmds, m.showInfo(fmt.Sprintf("Pushed '%s'.", inst.Title), 3*time.Second))
+			cmds = append(cmds, m.showInfo(fmt.Sprintf("Pushed '%s'.", inst.Title), 3*time.Second), m.startPRCheck())
 		}
 	}
 	if msg.err != nil {

@@ -102,6 +102,17 @@ type home struct {
 	// metadataPasses counts metadata passes, to compute diffs on every diffEvery-th.
 	metadataPasses int
 
+	// prEnabled is set when gh is installed, so pull requests can be looked up (app/pr.go).
+	prEnabled bool
+	// prChecking is set while a pull request lookup runs; prRecheck asks for another
+	// once it's done.
+	prChecking, prRecheck bool
+	// prGen numbers pull request lookups, so a scheduled one superseded by a lookup
+	// started early (after a push) is dropped.
+	prGen int
+	// prLastErr is the last lookup's error, so a repeated error is only logged once.
+	prLastErr string
+
 	// -- State --
 
 	// state is the current discrete state of the application
@@ -186,6 +197,7 @@ func newHome(ctx context.Context, program string, autoYes bool) *home {
 		state:        stateDefault,
 		appState:     appState,
 		exeWatch:     newExeWatch(),
+		prEnabled:    git.GHAvailable(),
 	}
 	h.list = ui.NewList(&h.spinner, autoYes)
 	preview.SetSpinner(&h.spinner)
@@ -249,6 +261,7 @@ func (m *home) Init() tea.Cmd {
 		m.spinner.Tick,
 		previewTickCmd(),
 		m.nextMetadataPass(),
+		m.startPRCheck(),
 		checkLeftoverWorktreesCmd,
 	}
 	if m.exeWatch != nil {
@@ -386,6 +399,10 @@ func (m *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.handlePreviewCaptured(msg)
 	case busyDoneMsg:
 		return m, m.handleBusyDone(msg)
+	case prTickMsg:
+		return m, m.handlePRTick(msg)
+	case prCheckedMsg:
+		return m, m.handlePRChecked(msg)
 	case killDoneMsg:
 		return m, m.handleKillDone(msg)
 	case keyupMsg:
@@ -510,7 +527,8 @@ func (m *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.showHelpScreen(helpStart(msg.instance), nil)
 		}
 
-		return m, tea.Batch(tea.WindowSize(), m.instanceChanged(), setupErrCmd)
+		// A session started on an existing branch may already have a pull request.
+		return m, tea.Batch(tea.WindowSize(), m.instanceChanged(), setupErrCmd, m.startPRCheck())
 	case spinner.TickMsg:
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)

@@ -9,8 +9,8 @@ import (
 // Mouse support: clicking a session in the list selects it, and clicking a
 // Preview / Diff / Terminal tab switches to it. Hovering either highlights it.
 // Clicking the → on the selected or hovered session, or clicking inside the Preview or
-// Terminal pane, attaches like Enter. All of it is ignored while an overlay or prompt is
-// open.
+// Terminal pane, attaches like Enter. Clicking a session's pull request badge opens the
+// pull request. All of it is ignored while an overlay or prompt is open.
 //
 // View() lays out the list on the left and the tabbed window to its right,
 // both one line below the top (PaddingTop(1)).
@@ -67,7 +67,10 @@ func (m *home) handleMouseHover(x, y int) {
 		item, tab, open = m.listItemAt(x, y), m.tabAt(x, y), m.paneOpensAt(x, y)
 	}
 	m.list.SetHoverIdx(item) // the arrow shows on the hovered item, so set it first
-	m.list.SetHover(item, item >= 0 && m.openArrowAt(x, y) == item)
+	// The badge wins where it meets the arrow's target, as it does for clicks.
+	onPR := item >= 0 && m.prBadgeAt(x, y) == item
+	m.list.SetHover(item, !onPR && item >= 0 && m.openArrowAt(x, y) == item)
+	m.list.SetHoverPR(onPR)
 	m.tabbedWindow.SetHoverTab(tab)
 	m.tabbedWindow.SetHoverOpen(open)
 }
@@ -76,6 +79,11 @@ func (m *home) handleMouseHover(x, y int) {
 func (m *home) handleMouseClick(x, y int) tea.Cmd {
 	if m.state != stateDefault {
 		return nil
+	}
+	// Before the arrow: its target reaches onto the branch line, where the badge can be.
+	if item := m.prBadgeAt(x, y); item >= 0 {
+		m.list.SetSelectedInstance(item)
+		return tea.Batch(m.instanceChanged(), m.openPullRequest(item))
 	}
 	if item := m.openArrowAt(x, y); item >= 0 {
 		m.list.SetSelectedInstance(item)

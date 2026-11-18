@@ -57,6 +57,9 @@ type Instance struct {
 
 	// DiffStats stores the current git diff statistics
 	diffStats *git.DiffStats
+	// pullRequest is the GitHub pull request from the instance's branch, if any. Only the
+	// UI goroutine reads or writes it.
+	pullRequest *git.PullRequest
 
 	// selectedBranch is the existing branch to start on (empty = new branch from HEAD)
 	selectedBranch string
@@ -89,16 +92,17 @@ type Instance struct {
 // ToInstanceData converts an Instance to its serializable form
 func (i *Instance) ToInstanceData() InstanceData {
 	data := InstanceData{
-		Title:     i.Title,
-		Path:      i.Path,
-		Branch:    i.Branch,
-		Status:    i.Status,
-		Height:    i.Height,
-		Width:     i.Width,
-		CreatedAt: i.CreatedAt,
-		UpdatedAt: time.Now(),
-		Program:   i.Program,
-		AutoYes:   i.AutoYes,
+		Title:       i.Title,
+		Path:        i.Path,
+		Branch:      i.Branch,
+		Status:      i.Status,
+		Height:      i.Height,
+		Width:       i.Width,
+		CreatedAt:   i.CreatedAt,
+		UpdatedAt:   time.Now(),
+		Program:     i.Program,
+		AutoYes:     i.AutoYes,
+		PullRequest: i.pullRequest,
 	}
 
 	// Only include worktree data if gitWorktree is initialized
@@ -128,15 +132,16 @@ func (i *Instance) ToInstanceData() InstanceData {
 // FromInstanceData creates a new Instance from serialized data
 func FromInstanceData(data InstanceData) (*Instance, error) {
 	instance := &Instance{
-		Title:     data.Title,
-		Path:      data.Path,
-		Branch:    data.Branch,
-		Status:    data.Status,
-		Height:    data.Height,
-		Width:     data.Width,
-		CreatedAt: data.CreatedAt,
-		UpdatedAt: data.UpdatedAt,
-		Program:   data.Program,
+		Title:       data.Title,
+		Path:        data.Path,
+		Branch:      data.Branch,
+		Status:      data.Status,
+		Height:      data.Height,
+		Width:       data.Width,
+		CreatedAt:   data.CreatedAt,
+		UpdatedAt:   data.UpdatedAt,
+		Program:     data.Program,
+		pullRequest: data.PullRequest,
 		gitWorktree: git.NewGitWorktreeFromStorage(
 			data.Worktree.RepoPath,
 			data.Worktree.WorktreePath,
@@ -666,6 +671,27 @@ func (i *Instance) SetDiffStats(stats *git.DiffStats) {
 // GetDiffStats returns the current git diff statistics
 func (i *Instance) GetDiffStats() *git.DiffStats {
 	return i.diffStats
+}
+
+// PullRequest returns the GitHub pull request from the instance's branch, or nil.
+func (i *Instance) PullRequest() *git.PullRequest {
+	return i.pullRequest
+}
+
+// SetPullRequest sets the instance's pull request (nil for none). Call it from the UI
+// goroutine.
+func (i *Instance) SetPullRequest(pr *git.PullRequest) {
+	i.pullRequest = pr
+}
+
+// PullRequestRef returns the repository and branch to look up the instance's pull request
+// by, or false if it has no branch yet.
+func (i *Instance) PullRequestRef() (git.BranchRef, bool) {
+	if !i.started || i.gitWorktree == nil {
+		return git.BranchRef{}, false
+	}
+	ref := git.BranchRef{RepoPath: i.gitWorktree.GetRepoPath(), Branch: i.gitWorktree.GetBranchName()}
+	return ref, ref.RepoPath != "" && ref.Branch != ""
 }
 
 // SendPrompt sends a prompt to the tmux session
